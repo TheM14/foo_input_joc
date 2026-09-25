@@ -94,10 +94,11 @@ public:
 
     // ffmpeg_path, the input file and whatever should follow "-i <input>" are
     // separate: the 5.1 bed and the E-AC-3 metadata stream of a container file are
-    // both ffmpeg output, they only differ in those arguments.
+    // both ffmpeg output, they only differ in those arguments.  input_arguments come
+    // before -i and carry the decoder options the bed needs.
     bool start(const std::string& ffmpeg_path, const std::string& input_path,
-               const std::wstring& output_arguments, const char* label,
-               const std::wstring& stderr_path, std::string* error,
+               const std::wstring& input_arguments, const std::wstring& output_arguments,
+               const char* label, const std::wstring& stderr_path, std::string* error,
                std::size_t pipe_bytes = kBedPipeBytes) {
         SECURITY_ATTRIBUTES attributes{};
         attributes.nLength = sizeof(attributes);
@@ -118,7 +119,9 @@ public:
                                         CREATE_ALWAYS, 0, nullptr);
 
         std::wstring command = L"\"" + utf8_to_wide(ffmpeg_path) + L"\"";
-        command += L" -hide_banner -loglevel error -nostdin -y -i \"";
+        command += L" -hide_banner -loglevel error -nostdin -y ";
+        command += input_arguments;  // input options must precede -i
+        command += L" -i \"";
         command += utf8_to_wide(input_path);
         command += L"\" ";
         command += output_arguments;
@@ -395,7 +398,7 @@ bool probe_container_joc(const std::string& ffmpeg_path, const std::string& path
         return length == 0 ? std::wstring(L"NUL")
                            : std::wstring(temp) + L"joc_container_probe.log";
     }();
-    if (!pipe.start(ffmpeg_path, path, arguments, "probe", stderr_path, &error, 1u << 20)) {
+    if (!pipe.start(ffmpeg_path, path, L"", arguments, "probe", stderr_path, &error, 1u << 20)) {
         if (detail != nullptr) *detail = error;
         return false;
     }
@@ -604,10 +607,12 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
     // The 5.1 core PCM, exactly as the reference renderer's own core decode does it:
     // 5.1 interleaved float32 at 48 kHz, the layout the renderer expects
     // (L R C LFE Ls Rs).
+    // -drc_scale 0 -target_level 0: the bed is taken as stored, without the stream's
+    // dynrng or target-level metadata being applied by the decoder.
     std::wstring bed_arguments = L"-map 0:a:";
     bed_arguments += std::to_wstring(settings.audio_index);
     bed_arguments += L" -vn -ac 6 -ar 48000 -c:a pcm_f32le -f f32le -";
-    if (!impl.bed.start(settings.ffmpeg_path, input_path, bed_arguments, "bed",
+    if (!impl.bed.start(settings.ffmpeg_path, input_path, L"-drc_scale 0 -target_level 0", bed_arguments, "bed",
                         stderr_path_for(L"joc_ffmpeg_bed.log"), error)) {
         return false;
     }
@@ -618,7 +623,7 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
         std::wstring stream_arguments = L"-map 0:a:";
         stream_arguments += std::to_wstring(settings.audio_index);
         stream_arguments += L" -vn -c:a copy -f eac3 -";
-        if (!impl.eac3_pipe.start(settings.ffmpeg_path, input_path, stream_arguments, "metadata",
+        if (!impl.eac3_pipe.start(settings.ffmpeg_path, input_path, L"", stream_arguments, "metadata",
                                   stderr_path_for(L"joc_ffmpeg_stream.log"), error,
                                   1u << 20)) {
             return false;

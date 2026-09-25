@@ -118,7 +118,7 @@ Status Stream::create(const Config& config) {
             }
             render_options.object_delay_samples = config_.object_delay_samples;
             render_options.tail_seconds = config_.tail_seconds;
-            render_options.output_gain = std::pow(10.0, config_.gain_db / 20.0);
+            render_options.output_gain = 1.0;
             if (status.ok()) {
                 status = rosella_.open(model, render_options);
             }
