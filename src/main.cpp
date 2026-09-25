@@ -8,7 +8,6 @@
 #include <SDK/componentversion.h>
 #include <SDK/coreversion.h>
 #include <SDK/initquit.h>
-
 #include "log.h"
 
 // Kept in one place: the string reported to foobar2000 and written to the log

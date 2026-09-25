@@ -9,16 +9,26 @@ install beside `foo_input_joc.dll`.
 
 ## What it does
 
-1. Reads the E-AC-3 syncframes and decides from the bitstream whether the file really
-   carries JOC (an EMDF container holding both the OAMD and the JOC payload).
-2. A file without JOC is handed back to foobar2000 with `exception_io_unsupported_format`,
-   so the built-in E-AC-3 decoder plays it — this component never decodes plain E-AC-3.
-3. A JOC file is decoded as: the syncframes go to the renderer as metadata, the 5.1 core
+1. Finds the audio: a bare `.eac3` / `.ec3` stream is read as it is, while a container
+   (`.mp4`, `.m4a`, `.m4b`, `.m4p`, `.m4r`, `.mov`, `.mkv`, `.mka`, `.webm`) is looked into
+   first — the container's own headers say whether an E-AC-3 track is present and which
+   audio track it is (MP4 sample entry `ec-3`, Matroska `CodecID A_EAC3`), and ffmpeg then
+   copies that track out of the file byte for byte. The header walk is bounded and cheap, so
+   an MP4 holding AAC is declined without starting anything.
+2. Decides from the bitstream whether it really carries JOC (an EMDF container holding both
+   the OAMD and the JOC payload — container metadata only ever says "E-AC-3", and the JOC
+   flag inside it is frequently missing).
+3. A file with no E-AC-3 track, or with one that carries no JOC, is handed back to
+   foobar2000 with `exception_io_unsupported_format`, so the built-in decoder plays it — this
+   component never decodes plain AC-3 or E-AC-3.
+4. A JOC file is decoded as: the syncframes go to the renderer as metadata, the 5.1 core
    PCM comes from ffmpeg, and the renderer pairs them (one syncframe : 1536 bed samples)
    and produces the output PCM, which is handed back to foobar2000.
 
 ```
-.eac3 file
+.eac3 / .ec3 file          container (.mp4 .mkv .m4a ...)
+  │                          ├─ header walk (src/container_scan.cpp) ── no E-AC-3 ──▶ next decoder
+  │                          └─ E-AC-3 track ── ffmpeg -c:a copy ──▶ syncframes
   ├─ JOC check (src/eac3_scan.cpp)  ─── no JOC ──▶ built-in E-AC-3 decoder
   └─ JOC
       ├─ syncframes ────────────────────▶ renderer metadata
@@ -34,12 +44,13 @@ install beside `foo_input_joc.dll`.
 |---|---|
 | `kernel/` | Copy of the `joc_core` C++ sources (`include/` + `src/`) and `joc_kernel.vcxproj`, the static library the component links |
 | `src/eac3_scan.*` | Syncframe walk and the JOC bitstream test |
+| `src/container_scan.*` | Bounded header walk of MP4/MOV and Matroska: is there an E-AC-3 track, which one, and how long is the file |
 | `src/joc_decode.*` | Decode engine: starts ffmpeg, drives the renderer, handles the end of stream. No foobar2000 headers, so it also builds into the offline tools |
 | `src/input_joc.cpp` | The foobar2000 input: format recognition, yielding, `get_info`, `initialize`, `run` |
 | `src/settings.*` | Configuration values and their environment overrides (development only) |
 | `src/prefs.cpp`, `src/prefs.rc` | The preferences page |
 | `src/log.*` | Diagnostic log written next to the DLL |
-| `tests/` | Offline tools: bitstream self-test and cross-check against the renderer, render harness, preferences-page layout check |
+| `tests/` | Offline tools: bitstream self-test and cross-check against the renderer, render harness, preferences-page layout check, container-probe check |
 | `tools/` | SDK fetch, build, package, deploy, unattended test bed run |
 
 ## Build
@@ -69,6 +80,21 @@ and a DLL of the wrong architecture is silently ignored.
 Always let foobar2000 exit through `/exit`; a force-killed instance leaves a
 `<profile>\running` marker behind and the next start then refuses to load any user
 component.
+
+### Containers need one look at the decoder list
+
+foobar2000 tries the decoders in the order shown in Preferences → **Decoding** (the
+"list of available decoders", where entries can be moved up and down). The built-in
+container readers are in that list too, and when one of them is offered an MP4 or Matroska
+file before this component, it takes the file and the JOC objects are lost — the file plays
+as plain E-AC-3.
+
+So, to play JOC from a container, move **JOC decoder (E-AC-3 JOC)** above **foobar2000 MP4
+Demuxer** and **foobar2000 Matroska/WebM Reader** in that list. Nothing else is needed, and
+bare `.eac3` / `.ec3` files are unaffected by the order. This is the same thing every
+third-party decoder (the FFmpeg wrapper, for one) asks for, which is why the component does
+not try to work around it. If a container still plays as plain E-AC-3, that list is where to
+look.
 
 ## Settings
 
@@ -101,7 +127,10 @@ Development only: they override the stored settings for one run and every use is
 ## Known limitations
 
 * ADM BWF output is not implemented.
-* Containers (`.m4a`, `.mkv`) are not claimed: only bare `.eac3` / `.ec3` streams.
+* A container is only claimed when this component is ahead of the built-in container reader
+  in Preferences → Decoding, as described under [Install](#install); the core does not let a
+  decoder ask for a file another entry has already taken.
+* Transport streams (`.ts`, `.m2ts`) are not claimed.
 * The room tail is returned in full; the reference command-line renderer additionally trims
   trailing samples below a threshold, so its output can be shorter.
 * x86 and x64 do not produce bit-identical binaural output (last-bit differences): the

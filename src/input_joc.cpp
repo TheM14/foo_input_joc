@@ -18,6 +18,7 @@
 #include <cstring>
 #include <string>
 
+#include "container_scan.h"
 #include "eac3_scan.h"
 #include "joc_decode.h"
 #include "log.h"
@@ -62,6 +63,24 @@ public:
         input_open_file_helper(source, path, reason, abort);
         m_file = source;
 
+        // The core passes URLs ("file://C:\...").  ffmpeg and the file APIs need a
+        // native path, and a URL we cannot map to one is a file we cannot decode.
+        try {
+            m_native_path = filesystem::g_get_native_path(m_path.c_str());
+        } catch (const pfc::exception& error) {
+            joc_log::line("decoder: not a native file path (%s): %s", m_path.c_str(),
+                          error.what());
+            throw exception_io_unsupported_format();
+        }
+
+        const char* extension = std::strrchr(m_native_path.get_ptr(), '.');
+        extension = (extension != nullptr) ? extension + 1 : "";
+
+        if (joc_container::is_container_extension(extension)) {
+            open_container(extension);
+            return;
+        }
+
         pfc::array_t<t_uint8> buffer;
         buffer.set_size(kSniffBytes);
         const std::size_t got = m_file->read(buffer.get_ptr(), kSniffBytes, abort);
@@ -78,24 +97,60 @@ public:
             joc_log::line("decoder: yielding to the built-in decoder (%s)", scan.detail);
             throw exception_io_unsupported_format();
         }
-        joc_log::line("decoder: claiming this file as E-AC-3 JOC");
+        joc_log::line("decoder: claiming this file as E-AC-3 JOC (bare stream)");
+        m_input_kind = joc_decode::InputKind::kBare;
+    }
 
-        // The core passes URLs ("file://C:\...").  ffmpeg and the file APIs need a
-        // native path, and a URL we cannot map to one is a file we cannot decode.
-        try {
-            m_native_path = filesystem::g_get_native_path(m_path.c_str());
-        } catch (const pfc::exception& error) {
-            joc_log::line("decoder: not a native file path (%s): %s", m_path.c_str(),
-                            error.what());
+    // Two questions, in this order: is there an E-AC-3 track inside (answered from
+    // the container's own headers, so a library scan pays nothing for the MP4s that
+    // hold AAC), and does that track carry JOC (answered from a copied prefix of
+    // the track).  Either "no" hands the file to the next decoder in the table.
+    void open_container(const char* extension) {
+        m_container = joc_container::scan(m_native_path.get_ptr());
+        if (!m_container.eac3) {
+            joc_log::line("decoder: yielding to the built-in decoder (%s)",
+                          m_container.detail.c_str());
             throw exception_io_unsupported_format();
         }
-        joc_log::line("decoder: native path \"%s\"", m_native_path.get_ptr());
+
+        const joc_decode::Settings settings = joc_settings::current();
+        bool joc = false;
+        std::string detail;
+        if (!joc_decode::probe_container_joc(settings.ffmpeg_path, m_native_path.get_ptr(),
+                                            m_container.audio_index, &joc, &detail)) {
+            joc_log::line("decoder: cannot examine the E-AC-3 track (%s); yielding",
+                          detail.c_str());
+            throw exception_io_unsupported_format();
+        }
+        if (!joc) {
+            joc_log::line("decoder: yielding to the built-in decoder (E-AC-3 track %u carries "
+                          "no JOC: %s)",
+                          m_container.audio_index, detail.c_str());
+            throw exception_io_unsupported_format();
+        }
+
+        joc_log::line("decoder: claiming this file as E-AC-3 JOC (%s, audio track %u, .%s)",
+                      joc_container::kind_name(m_container.kind), m_container.audio_index,
+                      extension);
+        m_input_kind = joc_decode::InputKind::kContainer;
+        m_audio_index = m_container.audio_index;
     }
 
     void get_info(file_info& info, abort_callback& abort) {
         (void)abort;
         const joc_decode::FileProbe probe = joc_decode::probe_file(m_native_path.get_ptr());
         const joc_decode::Settings settings = joc_settings::current();
+
+        // A container knows its own duration even though the E-AC-3 syncframes are
+        // not directly addressable in the file.
+        const bool container = (m_input_kind == joc_decode::InputKind::kContainer);
+        const double duration = (container && m_container.duration_seconds > 0.0)
+                                    ? m_container.duration_seconds
+                                    : probe.duration_seconds;
+        const std::uint64_t frames =
+            probe.frames != 0
+                ? probe.frames
+                : ((duration > 0.0) ? static_cast<std::uint64_t>(duration * 48000.0 / 1536.0) : 0);
 
         unsigned channels = 2;
         std::string render;
@@ -115,12 +170,12 @@ public:
         info.info_set_int("channels", channels);
         info.info_set_int("bitspersample", 32);
         info.info_set("bitspersample_extra", "floating-point");
-        info.set_length(probe.duration_seconds);
-        if (probe.duration_seconds > 0.0) {
+        info.set_length(duration);
+        if (duration > 0.0) {
             const t_filesize bytes = m_file.is_valid() ? m_file->get_size(abort) : filesize_invalid;
             if (bytes != filesize_invalid && bytes > 0) {
                 info.info_set_bitrate(static_cast<t_int64>(
-                    static_cast<double>(bytes) * 8.0 / probe.duration_seconds / 1000.0));
+                    static_cast<double>(bytes) * 8.0 / duration / 1000.0));
             }
         }
         // Custom fields: visible in Properties and usable as %joc_*% in title
@@ -129,11 +184,19 @@ public:
         info.info_set("joc_hrtf", settings.hrtf_file.empty()
                                       ? "(未设置)"
                                       : file_name_of(settings.hrtf_file).c_str());
-        info.info_set_int("joc_frames", static_cast<t_int64>(probe.frames));
-        info.info_set("joc_scan", probe.detail.c_str());
-        joc_log::line("decoder: get_info duration=%.3f s frames=%llu channels=%u render=%s",
-                        probe.duration_seconds, static_cast<unsigned long long>(probe.frames),
-                        channels, render.c_str());
+        info.info_set_int("joc_frames", static_cast<t_int64>(frames));
+        info.info_set("joc_scan", container ? m_container.detail.c_str() : probe.detail.c_str());
+        if (container) {
+            char text[128] = {};
+            std::snprintf(text, sizeof(text), "%s (%s, audio track %u)",
+                          joc_container::kind_name(m_container.kind),
+                          m_container.codec.empty() ? "E-AC-3" : m_container.codec.c_str(),
+                          m_container.audio_index);
+            info.info_set("joc_container", text);
+        }
+        joc_log::line("decoder: get_info duration=%.3f s frames=%llu channels=%u render=%s%s",
+                      duration, static_cast<unsigned long long>(frames), channels, render.c_str(),
+                      container ? " (container)" : "");
     }
 
     t_filestats2 get_stats2(uint32_t flags, abort_callback& abort) {
@@ -144,6 +207,8 @@ public:
     void decode_initialize(unsigned flags, abort_callback& abort) {
         (void)abort;
         m_settings = joc_settings::current();
+        m_settings.input_kind = m_input_kind;
+        m_settings.audio_index = m_audio_index;
         joc_log::line("decoder: initialize flags=0x%X settings: %s", flags,
                         joc_settings::describe(m_settings).c_str());
 
@@ -224,18 +289,28 @@ public:
 
     static bool g_is_our_path(const char* path, const char* extension) {
         (void)path;
-        // Claim by extension, then decide from the bitstream in open(): a file that
-        // turns out not to carry JOC is handed back with
-        // exception_io_unsupported_format, and the core moves on to the next
-        // decoder in its priority table.
+        // Claim by extension, then decide from the contents in open(): a file whose
+        // audio turns out not to be E-AC-3 JOC is handed back with
+        // exception_io_unsupported_format, and the core moves on to the next decoder
+        // in its priority table.  Containers are included because an E-AC-3 JOC
+        // track is commonly wrapped in MP4 or Matroska; the container walk in
+        // open() is what keeps the other files cheap to decline.
+        if (joc_container::is_container_extension(extension)) return true;
         return (extension != nullptr) &&
                ((stricmp_utf8(extension, "eac3") == 0) || (stricmp_utf8(extension, "ec3") == 0));
     }
 
     static bool g_is_our_content_type(const char* content_type) {
-        (void)content_type;
-        // Container dispatch (MP4 ec-3, Matroska A_EAC3) is not claimed: only bare
-        // E-AC-3 streams are handled, so let the container readers have them.
+        if (content_type == nullptr) return false;
+        // E-AC-3 content types, and only the E-AC-3 ones: the generic Dolby aliases
+        // are deliberately left alone, because a track the core can already decode
+        // must not end up claimed by an entry that will not decode it.
+        static const char* const kTypes[] = {"audio/eac3", "audio/eac3joc", "audio/ec3",
+                                            "audio/x-eac3", "E-AC-3",      "eac3",
+                                            "ec3"};
+        for (const char* candidate : kTypes) {
+            if (stricmp_utf8(content_type, candidate) == 0) return true;
+        }
         return false;
     }
 
@@ -250,6 +325,11 @@ private:
     pfc::string8 m_native_path;
     joc_decode::Settings m_settings;
     joc_decode::Engine m_engine;
+    // Set by open(): a bare stream is read directly, an E-AC-3 track inside a
+    // container is extracted by ffmpeg before it reaches the renderer.
+    joc_decode::InputKind m_input_kind = joc_decode::InputKind::kBare;
+    unsigned m_audio_index = 0;
+    joc_container::Result m_container;
     std::vector<float> m_buffer;
     unsigned m_channels = 2;
     std::uint64_t m_frames_delivered = 0;

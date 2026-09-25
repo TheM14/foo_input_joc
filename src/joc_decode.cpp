@@ -88,19 +88,24 @@ const char* error_text(const CoreApi& api, joc_error code) {
 // ---------------------------------------------------------------------------
 // ffmpeg child process producing the 5.1 core PCM on a pipe.
 // ---------------------------------------------------------------------------
-class BedProcess {
+class FfmpegPipe {
 public:
-    ~BedProcess() { stop(); }
+    ~FfmpegPipe() { stop(); }
 
+    // ffmpeg_path, the input file and whatever should follow "-i <input>" are
+    // separate: the 5.1 bed and the E-AC-3 metadata stream of a container file are
+    // both ffmpeg output, they only differ in those arguments.
     bool start(const std::string& ffmpeg_path, const std::string& input_path,
-               const std::wstring& stderr_path, std::string* error) {
+               const std::wstring& output_arguments, const char* label,
+               const std::wstring& stderr_path, std::string* error,
+               std::size_t pipe_bytes = kBedPipeBytes) {
         SECURITY_ATTRIBUTES attributes{};
         attributes.nLength = sizeof(attributes);
         attributes.bInheritHandle = TRUE;
         HANDLE read_end = nullptr;
         HANDLE write_end = nullptr;
-        if (CreatePipe(&read_end, &write_end, &attributes, static_cast<DWORD>(kBedPipeBytes)) == FALSE) {
-            if (error != nullptr) *error = "cannot create the core PCM pipe";
+        if (CreatePipe(&read_end, &write_end, &attributes, static_cast<DWORD>(pipe_bytes)) == FALSE) {
+            if (error != nullptr) *error = std::string("cannot create the ") + label + " pipe";
             return false;
         }
         // Only the child's end is inheritable.
@@ -115,10 +120,8 @@ public:
         std::wstring command = L"\"" + utf8_to_wide(ffmpeg_path) + L"\"";
         command += L" -hide_banner -loglevel error -nostdin -y -i \"";
         command += utf8_to_wide(input_path);
-        // Identical to the reference CLI's core decode: 5.1 interleaved float32
-        // at 48 kHz, which is the layout the rendering core expects
-        // (L R C LFE Ls Rs).
-        command += L"\" -map 0:a:0 -vn -ac 6 -ar 48000 -c:a pcm_f32le -f f32le -";
+        command += L"\" ";
+        command += output_arguments;
 
         STARTUPINFOW startup{};
         startup.cb = sizeof(startup);
@@ -138,13 +141,13 @@ public:
         if (error_file != INVALID_HANDLE_VALUE) CloseHandle(error_file);
         if (created == FALSE) {
             CloseHandle(read_end);
-            if (error != nullptr) *error = "cannot start ffmpeg for the 5.1 core PCM";
+            if (error != nullptr) *error = std::string("cannot start ffmpeg for the ") + label;
             return false;
         }
         CloseHandle(process.hThread);
         pipe_ = read_end;
         process_ = process.hProcess;
-        joc_log::line("core bed: ffmpeg started (pid %lu)", process.dwProcessId);
+        joc_log::line("core %s: ffmpeg started (pid %lu)", label, process.dwProcessId);
         return true;
     }
 
@@ -342,14 +345,108 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
 }
 
 // ---------------------------------------------------------------------------
+// JOC verdict for a container file, without rendering anything.
+// ---------------------------------------------------------------------------
+bool probe_container_joc(const std::string& ffmpeg_path, const std::string& path,
+                         unsigned audio_index, bool* joc, std::string* detail) {
+    struct Entry {
+        std::string path;
+        unsigned audio_index = 0;
+        std::uint64_t size = 0;
+        std::uint64_t modified = 0;
+        bool joc = false;
+        std::string detail;
+    };
+    static std::vector<Entry> cache;
+
+    std::uint64_t size = 0;
+    std::uint64_t modified = 0;
+    {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if (GetFileAttributesExW(utf8_to_wide(path).c_str(), GetFileExInfoStandard, &data) !=
+            FALSE) {
+            size = (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+            modified = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+                       data.ftLastWriteTime.dwLowDateTime;
+        }
+    }
+    for (const Entry& entry : cache) {
+        if (entry.path == path && entry.audio_index == audio_index && entry.size == size &&
+            entry.modified == modified) {
+            if (joc != nullptr) *joc = entry.joc;
+            if (detail != nullptr) *detail = entry.detail;
+            return true;
+        }
+    }
+
+    if (ffmpeg_path.empty()) {
+        if (detail != nullptr) *detail = "no ffmpeg configured";
+        return false;
+    }
+
+    FfmpegPipe pipe;
+    std::string error;
+    std::wstring arguments = L"-map 0:a:";
+    arguments += std::to_wstring(audio_index);
+    arguments += L" -vn -t 3 -c:a copy -f eac3 -";
+    const std::wstring stderr_path = [] {
+        wchar_t temp[MAX_PATH + 1] = {};
+        const DWORD length = GetTempPathW(MAX_PATH, temp);
+        return length == 0 ? std::wstring(L"NUL")
+                           : std::wstring(temp) + L"joc_container_probe.log";
+    }();
+    if (!pipe.start(ffmpeg_path, path, arguments, "probe", stderr_path, &error, 1u << 20)) {
+        if (detail != nullptr) *detail = error;
+        return false;
+    }
+
+    std::vector<std::uint8_t> prefix(512u * 1024u);
+    std::size_t filled = 0;
+    while (filled < prefix.size()) {
+        const std::size_t got = pipe.read(prefix.data() + filled, prefix.size() - filled);
+        if (got == 0) break;
+        filled += got;
+    }
+    pipe.stop();
+
+    const joc_eac3::ScanResult scan = joc_eac3::scan(prefix.data(), filled, 8);
+    const bool carries_joc = (scan.joc == joc_eac3::JocState::kYes);
+
+    Entry entry;
+    entry.path = path;
+    entry.audio_index = audio_index;
+    entry.size = size;
+    entry.modified = modified;
+    entry.joc = carries_joc;
+    entry.detail = scan.detail;
+    if (cache.size() >= 8) cache.erase(cache.begin());
+    cache.push_back(entry);
+
+    joc_log::line("container: %s track %u -> %s (%s)", path.c_str(), audio_index,
+                  carries_joc ? "JOC" : "not JOC", scan.detail);
+    if (joc != nullptr) *joc = carries_joc;
+    if (detail != nullptr) *detail = scan.detail;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 struct Engine::Impl {
     CoreApi api;
     joc_stream* stream = nullptr;
-    InputFile eac3;
-    BedProcess bed;
+    InputFile eac3;        // bare E-AC-3 input: read straight from the file
+    FfmpegPipe eac3_pipe;  // E-AC-3 inside a container: ffmpeg extracts the stream
+    bool eac3_from_pipe = false;
+    FfmpegPipe bed;
     Settings settings;
+
+    // The metadata stream comes either from the file itself or from ffmpeg.
+    std::size_t read_eac3(void* destination, std::size_t bytes) {
+        return eac3_from_pipe ? eac3_pipe.read(destination, bytes)
+                              : eac3.read(destination, bytes);
+    }
+
     unsigned channels = 0;
     std::uint64_t frames_queued = 0;    // E-AC-3 frames handed to the core
     std::uint64_t bed_frames_pushed = 0;
@@ -382,7 +479,9 @@ void Engine::stop() {
         impl.stream = nullptr;
     }
     impl.bed.stop();
+    impl.eac3_pipe.stop();
     impl.eac3.close();
+    impl.eac3_from_pipe = false;
 }
 
 bool Engine::start(const std::string& input_path, const Settings& settings, std::string* error) {
@@ -402,9 +501,15 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
         return false;
     }
 
-    if (!impl.eac3.open(input_path)) {
-        if (error != nullptr) *error = "cannot open the input file";
-        return false;
+    // Metadata stream: a bare E-AC-3 file is read directly, while the E-AC-3 track
+    // of a container is extracted by ffmpeg (stream copy, so the syncframes reach
+    // the renderer exactly as stored).
+    impl.eac3_from_pipe = (settings.input_kind == InputKind::kContainer);
+    if (!impl.eac3_from_pipe) {
+        if (!impl.eac3.open(input_path)) {
+            if (error != nullptr) *error = "cannot open the input file";
+            return false;
+        }
     }
 
     joc_stream_config config{};
@@ -479,20 +584,46 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
                     settings.speaker_layout.c_str(),
                     hrtf_in_use.empty() ? "(none)" : hrtf_in_use.c_str());
 
-    const std::wstring stderr_path = [] {
+    // ffmpeg's stderr lands next to the component rather than in whatever working
+    // directory the host process happens to have.  The two children write separate
+    // files so neither can truncate the other's diagnostics.
+    const auto stderr_path_for = [](const wchar_t* name) {
         HMODULE self = nullptr;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                            reinterpret_cast<LPCWSTR>(&speaker_channels), &self);
         wchar_t path[4096] = {};
         const DWORD length = GetModuleFileNameW(self, path, 4096);
-        if (length == 0) return std::wstring(L"joc_ffmpeg.log");
+        if (length == 0) return std::wstring(name);
         const std::wstring text(path, length);
         const std::wstring::size_type slash = text.find_last_of(L"\\/");
-        return slash == std::wstring::npos ? std::wstring(L"joc_ffmpeg.log")
-                                          : text.substr(0, slash) + L"\\joc_ffmpeg.log";
-    }();
-    if (!impl.bed.start(settings.ffmpeg_path, input_path, stderr_path, error)) return false;
+        return slash == std::wstring::npos ? std::wstring(name)
+                                          : text.substr(0, slash) + L"\\" + name;
+    };
+
+    // The 5.1 core PCM, exactly as the reference renderer's own core decode does it:
+    // 5.1 interleaved float32 at 48 kHz, the layout the renderer expects
+    // (L R C LFE Ls Rs).
+    std::wstring bed_arguments = L"-map 0:a:";
+    bed_arguments += std::to_wstring(settings.audio_index);
+    bed_arguments += L" -vn -ac 6 -ar 48000 -c:a pcm_f32le -f f32le -";
+    if (!impl.bed.start(settings.ffmpeg_path, input_path, bed_arguments, "bed",
+                        stderr_path_for(L"joc_ffmpeg_bed.log"), error)) {
+        return false;
+    }
+
+    if (impl.eac3_from_pipe) {
+        // Stream copy: the syncframes arrive byte for byte as they are stored, which
+        // is what the JOC metadata needs.
+        std::wstring stream_arguments = L"-map 0:a:";
+        stream_arguments += std::to_wstring(settings.audio_index);
+        stream_arguments += L" -vn -c:a copy -f eac3 -";
+        if (!impl.eac3_pipe.start(settings.ffmpeg_path, input_path, stream_arguments, "metadata",
+                                  stderr_path_for(L"joc_ffmpeg_stream.log"), error,
+                                  1u << 20)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -534,7 +665,7 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
             // across chunk boundaries: counting each chunk on its own loses one
             // frame at the end, which leaves the bed a frame short and the last
             // frame of the file unrendered.
-            const std::size_t got = impl.eac3.read(impl.eac3_buffer.data() + impl.eac3_carry,
+            const std::size_t got = impl.read_eac3(impl.eac3_buffer.data() + impl.eac3_carry,
                                                    impl.eac3_buffer.size() - impl.eac3_carry);
             const std::size_t total = impl.eac3_carry + got;
             if (total == 0) {

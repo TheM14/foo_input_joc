@@ -113,3 +113,22 @@ disabled, which is what "the option is there but cannot be clicked" otherwise lo
 
 Not verified here: how the page and the `%joc_*%` fields look on screen; that needs a human
 in front of the window.
+
+## Container support (mp4 / m4a / mov / mkv / mka / webm)
+
+Verified with the Win32 build, a 5.1 speaker layout, and the component installed in a
+portable foobar2000 1.6.19 profile:
+
+- `ffmpeg -i <bare .eac3> -c:a copy` muxed into MP4 and Matroska, then `-map 0:a:0 -c:a copy
+  -f eac3` extracted again, is byte-identical to a direct `-t 30 -c:a copy` of the source
+  (same SHA-256) — the renderer therefore sees the stored syncframes, not a re-encode.
+- The header probe (`tests/container_scan_test.cpp`, no foobar2000 involved) reports, for the
+  same material: `joc.mp4 -> mp4 eac3=1 audio#0 codec=ec-3 30.016 s`,
+  `joc.mkv -> matroska eac3=1 audio#0 codec=A_EAC3 30.016 s`, `plain_eac3.mp4 -> ec-3`,
+  `ac3.mp4 -> ac-3 (declined)`, `aac.mp4 -> mp4a (declined)`.
+- End to end, with the component ordered ahead of the container reader in
+  Preferences -> Decoding: `open()` is called, the track is found, the JOC verdict is positive,
+  the file is claimed, and playback reaches `end of stream`.
+- Negative case end to end: an MP4 holding E-AC-3 without JOC yields with
+  `E-AC-3 track 0 carries no JOC`, and the built-in decoder plays it.
+- Bare `.eac3` / `.ec3` handling is unchanged.

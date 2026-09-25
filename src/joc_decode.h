@@ -35,8 +35,18 @@ enum class HrtfSource {
     kRosella = 1,
 };
 
+// Where the E-AC-3 syncframes come from.  A bare stream is read straight from the
+// file; inside a container the track has to be extracted first (ffmpeg, stream copy).
+enum class InputKind {
+    kBare = 0,
+    kContainer = 1,
+};
+
 struct Settings {
     Output output = Output::kBinaural;
+    InputKind input_kind = InputKind::kBare;
+    // Which of the container's audio tracks holds the E-AC-3 stream, 0-based.
+    unsigned audio_index = 0;
     std::string speaker_layout = "7.1";
     HrtfSource hrtf_source = HrtfSource::kSofa;
     // Empty means the default file in the default folder, see resolve_hrtf_file().
@@ -86,6 +96,14 @@ struct FileProbe {
 // Walks the file's syncframes.  Cheap enough for a Media Library scan: it only
 // does pointer arithmetic over the stream, no decoding, no HRTF work.
 FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes = 0);
+
+// Decides whether the E-AC-3 track of a container file carries JOC, without
+// rendering anything: ffmpeg copies a short prefix of that track out (stream copy,
+// so the syncframes are the stored ones) and the same bitstream test is applied.
+// The verdict is cached per file, because the information and the decode pass would
+// otherwise each launch ffmpeg for it.
+bool probe_container_joc(const std::string& ffmpeg_path, const std::string& path,
+                         unsigned audio_index, bool* joc, std::string* detail);
 
 class Engine {
 public:
