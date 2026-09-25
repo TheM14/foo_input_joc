@@ -1,0 +1,52 @@
+#pragma code_page(65001)
+#include <windows.h>
+#include "resource.h"
+
+// The page is embedded by the host, which already provides the frame: the style,
+// the absence of a CAPTION statement and the font are exactly what the SDK's own
+// sample page uses (SDK\foobar2000\foo_sample\foo_sample.rc).  A CAPTION statement
+// implies WS_CAPTION, which would draw a second frame inside the host's and shift
+// every control down by the caption height -- visible but not clickable.
+IDD_JOC_PREFS DIALOGEX 0, 0, 330, 226
+STYLE DS_SETFONT | WS_CHILD
+FONT 8, "Microsoft Sans Serif", 400, 0, 0x0
+BEGIN
+    GROUPBOX        "输出", IDC_GROUP_OUTPUT, 7, 5, 316, 64
+    CONTROL         "双耳（HRTF）", IDC_RADIO_BINAURAL, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 16, 20, 72, 10
+    CONTROL         "扬声器布局", IDC_RADIO_SPEAKER, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 16, 38, 60, 10
+    LTEXT           "布局", IDC_LABEL_LAYOUT, 80, 39, 22, 10
+    COMBOBOX        IDC_COMBO_LAYOUT, 104, 36, 60, 120,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "双耳模式", IDC_LABEL_MODE, 172, 22, 42, 10
+    COMBOBOX        IDC_COMBO_MODE, 216, 19, 96, 90,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "房间尾音（秒）", IDC_LABEL_TAIL, 172, 41, 46, 10
+    EDITTEXT        IDC_EDIT_TAIL, 220, 38, 40, 13, ES_AUTOHSCROLL
+
+    GROUPBOX        "HRTF", IDC_GROUP_HRTF, 7, 74, 316, 84
+    CONTROL         "SOFA 文件", IDC_RADIO_HRTF_SOFA, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 16, 89, 56, 10
+    CONTROL         "Rosella 个性化模型", IDC_RADIO_HRTF_ROSELLA, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 78, 89, 78, 10
+    LTEXT           "HRTF 文件（留空＝默认位置）", IDC_LABEL_HRTF, 16, 106, 92, 10
+    EDITTEXT        IDC_EDIT_HRTF, 110, 103, 164, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "浏览…", IDC_BROWSE_HRTF, 279, 103, 38, 13
+    LTEXT           "留空时读组件目录下 HRTF\\binaural.sofa 或 binaural.personalized_headphone；SOFA 由渲染器内部编译，滤波组表已编入库中。",
+                    IDC_LABEL_HRTF_HINT, 16, 122, 300, 30
+
+    GROUPBOX        "增益", IDC_GROUP_GAIN, 7, 162, 152, 56
+    CONTROL         "应用增益", IDC_CHECK_GAIN, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 178, 58, 10
+    LTEXT           "dB", IDC_LABEL_GAIN, 80, 178, 12, 10
+    EDITTEXT        IDC_EDIT_GAIN, 96, 175, 40, 13, ES_AUTOHSCROLL
+    LTEXT           "双耳渲染后可能超过 0 dBFS，可用负值衰减。",
+                    IDC_LABEL_GAIN_HINT, 16, 194, 134, 20
+
+    GROUPBOX        "其它", IDC_GROUP_MISC, 165, 162, 158, 56
+    LTEXT           "ffmpeg.exe", IDC_LABEL_FFMPEG, 173, 178, 44, 10
+    EDITTEXT        IDC_EDIT_FFMPEG, 216, 175, 62, 13, ES_AUTOHSCROLL
+    PUSHBUTTON      "浏览…", IDC_BROWSE_FFMPEG, 282, 175, 35, 13
+    LTEXT           "", IDC_LABEL_STATUS, 173, 194, 144, 20
+END

@@ -1,0 +1,31 @@
+# Build products
+/build/
+/dist/
+/SDK/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.tlog
+*.idb
+*.ilk
+*.pdb
+*.obj
+*.exp
+
+# Component binaries: only ever produced by a build, never committed
+*.dll
+*.lib
+*.fb2k-component
+
+# HRTF data is supplied by whoever runs the component and is never distributed:
+# a SOFA measurement set or a personalised headphone model must not be committed.
+*.sofa
+*.jochrtf
+*.personalized_headphone
+rosella_kernels.npz
+
+# The component writes its own log next to the DLL
+joc_decoder.log

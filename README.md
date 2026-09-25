@@ -1,0 +1,114 @@
+# foo_input_joc
+
+foobar2000 input component for **E-AC-3 JOC (Dolby Atmos)** files: the JOC objects are
+rendered to binaural (HRTF) or to a speaker layout up to 7.1, in real time.
+
+Two files with the same name pay for the whole thing: `joc_core`'s C++ sources are copied
+into [`kernel/`](kernel/) and compiled straight into the component, so there is nothing to
+install beside `foo_input_joc.dll`.
+
+## What it does
+
+1. Reads the E-AC-3 syncframes and decides from the bitstream whether the file really
+   carries JOC (an EMDF container holding both the OAMD and the JOC payload).
+2. A file without JOC is handed back to foobar2000 with `exception_io_unsupported_format`,
+   so the built-in E-AC-3 decoder plays it — this component never decodes plain E-AC-3.
+3. A JOC file is decoded as: the syncframes go to the renderer as metadata, the 5.1 core
+   PCM comes from ffmpeg, and the renderer pairs them (one syncframe : 1536 bed samples)
+   and produces the output PCM, which is handed back to foobar2000.
+
+```
+.eac3 file
+  ├─ JOC check (src/eac3_scan.cpp)  ─── no JOC ──▶ built-in E-AC-3 decoder
+  └─ JOC
+      ├─ syncframes ────────────────────▶ renderer metadata
+      └─ ffmpeg -ac 6 -c:a pcm_f32le ───▶ 5.1 core PCM ──▶ renderer bed
+                                                             │
+                                                             ▼
+                                                    2 ch or ≤7.1 PCM ──▶ foobar2000
+```
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `kernel/` | Copy of the `joc_core` C++ sources (`include/` + `src/`) and `joc_kernel.vcxproj`, the static library the component links |
+| `src/eac3_scan.*` | Syncframe walk and the JOC bitstream test |
+| `src/joc_decode.*` | Decode engine: starts ffmpeg, drives the renderer, handles the end of stream. No foobar2000 headers, so it also builds into the offline tools |
+| `src/input_joc.cpp` | The foobar2000 input: format recognition, yielding, `get_info`, `initialize`, `run` |
+| `src/settings.*` | Configuration values and their environment overrides (development only) |
+| `src/prefs.cpp`, `src/prefs.rc` | The preferences page |
+| `src/log.*` | Diagnostic log written next to the DLL |
+| `tests/` | Offline tools: bitstream self-test and cross-check against the renderer, render harness, preferences-page layout check |
+| `tools/` | SDK fetch, build, package, deploy, unattended test bed run |
+
+## Build
+
+```powershell
+pwsh -File tools/setup_sdk.ps1          # official SDK into SDK/, pinned to target 1.5/1.6
+pwsh -File tools/build.ps1              # Win32 -> build\Win32\foo_input_joc.dll
+pwsh -File tools/build.ps1 -Platform x64
+pwsh -File tools/package.ps1            # both, packaged into dist\*.fb2k-component
+```
+
+`Release-Static` uses the static CRT (`/MT`); `/fp:precise` is required and must not be
+changed. `foo_input_joc.vcxproj` builds `kernel\joc_kernel.vcxproj` first through a project
+reference. The copied kernel sources are compiled with `JOC_STATIC` / `EJOC_STATIC` so their
+entry points are neither imported nor exported.
+
+## Install
+
+Either drop `dist\foo_input_joc-<version>-<arch>.fb2k-component` onto foobar2000 (or use
+Preferences → Components → Install), or copy `foo_input_joc.dll` into
+`<profile>\user-components\foo_input_joc\`. The per-component subdirectory is required:
+a DLL lying directly in `user-components\` is not scanned. 1.6 is 32-bit, 2.x ships both,
+and a DLL of the wrong architecture is silently ignored.
+
+`tools/deploy.ps1 -TestBed <path to portable foobar2000>` does the manual variant, and
+`tools/run.ps1 -TestBed <path> -Play <file>` runs it unattended and prints the log.
+Always let foobar2000 exit through `/exit`; a force-killed instance leaves a
+`<profile>\running` marker behind and the next start then refuses to load any user
+component.
+
+## Settings
+
+Preferences → Tools → **JOC decoder**:
+
+* **Output** — binaural, or a speaker layout from 2.0 to 7.1;
+* **Binaural mode** (near / mid / far) and the room **tail** in seconds;
+* **HRTF source** — a **SOFA** file or a **Rosella** `.personalized_headphone` model. Leave
+  the path empty to use the default location `<component directory>\HRTF\`:
+  `binaural.sofa` or `binaural.personalized_headphone`;
+* **Gain** — a switch plus a value in dB. Binaural rendering can exceed full scale on
+  material that does not clip in the core mix, so attenuation belongs here;
+* the **ffmpeg** executable to use.
+
+Nothing on the page is disabled; the status line states what is in effect.
+
+**HRTF data is not distributed with this repository.** A SOFA measurement set or a
+personalised headphone model is supplied by whoever runs the component (and is listed in
+`.gitignore` so it cannot be committed by accident). Speaker layouts and every offline test
+except binaural rendering work without one; binaural rendering without an HRTF fails with a
+message naming the file it looked for.
+
+## Environment overrides
+
+Development only: they override the stored settings for one run and every use is logged.
+`JOC_OUTPUT`, `JOC_LAYOUT`, `JOC_HRTF`, `JOC_HRTF_SOURCE`, `JOC_BINAURAL_MODE`, `JOC_GAIN_DB`,
+`JOC_GAIN_ENABLED`, `JOC_TAIL_SECONDS`, `JOC_OBJECT_DELAY`, `JOC_THREADS`, `JOC_FFMPEG`,
+`JOC_LOG`.
+
+## Known limitations
+
+* ADM BWF output is not implemented.
+* Containers (`.m4a`, `.mkv`) are not claimed: only bare `.eac3` / `.ec3` streams.
+* The room tail is returned in full; the reference command-line renderer additionally trims
+  trailing samples below a threshold, so its output can be shorter.
+* x86 and x64 do not produce bit-identical binaural output (last-bit differences): the
+  renderer's SIMD dispatch only applies to x86-64/ARM64, so 32-bit builds take the scalar
+  path. The speaker path is bit-identical on both.
+
+## Licence
+
+`LICENSE` is the upstream MIT licence, copied unchanged; `kernel/` is a copy of the upstream
+renderer sources and keeps their notices. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

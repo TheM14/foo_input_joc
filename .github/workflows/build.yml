@@ -1,0 +1,43 @@
+name: build
+
+# Builds both architectures and publishes the two installable component packages.
+# The SDK is fetched from foobar2000.org at build time (tools/setup_sdk.ps1) and the
+# renderer sources are part of this repository (kernel/), so nothing else is needed.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the foobar2000 SDK (target 1.5/1.6)
+        shell: pwsh
+        run: ./tools/setup_sdk.ps1 -TargetVersion 80
+
+      - name: Build both architectures and package them
+        shell: pwsh
+        run: ./tools/package.ps1
+
+      - name: List the packages
+        shell: pwsh
+        run: Get-ChildItem dist -Filter *.fb2k-component | Select-Object Name, Length
+
+      - name: Upload the x86 component (foobar2000 1.6 and 2.x 32-bit)
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo_input_joc-x86
+          path: dist/*-x86.fb2k-component
+          if-no-files-found: error
+
+      - name: Upload the x64 component (foobar2000 2.x 64-bit)
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo_input_joc-x64
+          path: dist/*-x64.fb2k-component
+          if-no-files-found: error

@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  joc_kernel: the JustOneCacophony rendering core, built as a static library
+  (/MT) so the foobar2000 component can link the engine directly instead of
+  shipping and loading joc_core.dll.
+
+  The sources under kernel\src and kernel\include are a verbatim copy of the
+  upstream library (see JustOneCacophonyCXX\CMakeLists.txt); the only edits are
+  the JOC_STATIC branch in kernel\include\joc_core.h / joc_stream.h and the
+  EJOC_STATIC branch in kernel\include\eac3joc_core.h, which turn JOC_API and
+  EJOC_API into empty macros for a static build.
+
+  Conventions deliberately mirror the component project (foo_input_joc.vcxproj)
+  and the kernel's own CMake build:
+    * configuration Release-Static, static CRT (/MT, MultiThreaded), no
+      redistributable;
+    * /fp:precise is mandatory, not cosmetic: the rendered output has to stay
+      bit-identical to the reference renderer, so no /fp:fast, no fast-math;
+    * /utf-8 (the sources are UTF-8) and /Zc:__cplusplus (joc_api.cpp reports
+      __cplusplus in its build-info string; without it MSVC answers 199711L);
+    * C++20, /permissive-, /W4, /O2 /Oi: the same flags CMake gives the MSVC
+      targets (JOC_MSVC_FLAGS in CMakeLists.txt), minus the /arch flags, which
+      belong to the individual SIMD units only.
+
+  ForcedIncludeFiles is NOT set: the component's src\joc_pch.h exists to pull
+  the standard library in ahead of the foobar2000 SDK headers, and the kernel
+  copy is a self-contained upstream tree that its own build force-includes
+  nothing into.  Keeping the kernel's compile environment equal to the one the
+  library is validated with is what the bit-exactness contract depends on.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release-Static|Win32">
+      <Configuration>Release-Static</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release-Static|x64">
+      <Configuration>Release-Static</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7B4E1D92-5C3A-4E0B-9F6D-2A8C41E7B530}</ProjectGuid>
+    <RootNamespace>joc_kernel</RootNamespace>
+    <ProjectName>joc_kernel</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release-Static'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseOfMfc>false</UseOfMfc>
+    <UseOfAtl>false</UseOfAtl>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <!--
+    The .lib lands next to the component's output: build\kernel-<Platform>\.
+    A separate IntDir per platform keeps the two architectures' objects apart.
+  -->
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)..\build\kernel-$(Platform)\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\joc_kernel\$(Platform)\</IntDir>
+    <TargetName>joc_kernel</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <Optimization>MaxSpeed</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel>Precise</FloatingPointModel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/utf-8 /Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
+      <!--
+        JOC_STATIC: the public headers declare nothing imported or exported
+        (see kernel\include\joc_core.h), because these sources are archived
+        into a .lib instead of the upstream joc_core.dll.
+        EJOC_STATIC does the same for the inner engine entry points declared in
+        kernel\include\eac3joc_core.h: without it the units that call them
+        (task.cpp, stream.cpp, objects16.cpp, binaural_runtime.cpp, speaker_*)
+        see __declspec(dllimport), emit __imp_ejoc_* references and the archive
+        can never be linked, because a static library has no import library to
+        resolve them from.  It covers the defining units too, including
+        src\joc_core\eac3joc_core.cpp, so the whole copy agrees on plain
+        symbols.  No hardware-related or numerical behaviour is involved.
+        NDEBUG and _CRT_SECURE_NO_WARNINGS are the two defines the kernel's own
+        MSVC build passes (JOC_MSVC_DEFINES in CMakeLists.txt); the writers use
+        std::fopen on purpose, for seekable byte-exact output.
+      -->
+      <PreprocessorDefinitions>NDEBUG;_CRT_SECURE_NO_WARNINGS;JOC_STATIC;EJOC_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!--
+    SIMD units, mirroring CMakeLists.txt (the JOC_SIMD_* block) exactly.
+
+    The ISA in the file name, one translation unit per ISA, each compiled with
+    its own /arch because MSVC has no function-level ISA attribute; dispatch.cpp
+    (a baseline unit) picks one at run time from CPUID/XGETBV.  The kernel
+    enables SIMD only for x86_64 and aarch64, so:
+
+      * Win32 (x86) gets NO SIMD unit and NO SIMD define: the scalar reference
+        and the probe/dispatch baseline are all it builds, exactly as
+        CMAKE_SIZEOF_VOID_P EQUAL 8 gates them out upstream;
+      * x64 gets the AVX2 and AVX-512 units, JOC_SIMD_HAVE_SSE2 / _AVX2 /
+        _AVX512, and a per-file /arch for those two files only;
+      * src\simd\kernels_intrin_neon.cpp is excluded everywhere here: the CMake
+        build lists it only for aarch64 (CMakeLists.txt lines 177-180), which no
+        configuration of this project targets.
+  -->
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>JOC_SIMD_HAVE_SSE2=1;JOC_SIMD_HAVE_AVX2=1;JOC_SIMD_HAVE_AVX512=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <!-- Verbatim copies of the upstream native library (JOC_REUSED_SOURCES). -->
+    <ClCompile Include="src\joc_core\eac3joc_core.cpp" />
+    <ClCompile Include="src\speaker\speaker_renderer.cpp" />
+    <ClCompile Include="src\binaural\binaural_renderer.cpp" />
+    <!-- Engine internals (JOC_INTERNAL_SOURCES). -->
+    <ClCompile Include="src\adm\adm_metadata.cpp" />
+    <ClCompile Include="src\adm\adm_tracks.cpp" />
+    <ClCompile Include="src\binaural\binaural_runtime.cpp" />
+    <ClCompile Include="src\binaural\sofa_binaural_renderer.cpp" />
+    <ClCompile Include="src\eac3_transport\eac3_reader.cpp" />
+    <ClCompile Include="src\emdf\emdf_parser.cpp" />
+    <ClCompile Include="src\foundation\bit_reader.cpp" />
+    <ClCompile Include="src\foundation\fft.cpp" />
+    <ClCompile Include="src\foundation\fs_utf8.cpp" />
+    <ClCompile Include="src\foundation\mini_json.cpp" />
+    <ClCompile Include="src\foundation\sha256.cpp" />
+    <ClCompile Include="src\hrtf\jochrtf.cpp" />
+    <ClCompile Include="src\hrtf\public_filterbank.cpp" />
+    <ClCompile Include="src\hrtf\rosella_model.cpp" />
+    <ClCompile Include="src\hrtf\rosella_renderer.cpp" />
+    <ClCompile Include="src\hrtf\kernel_tables.cpp" />
+    <ClCompile Include="src\hrtf\sofa.cpp" />
+    <ClCompile Include="src\hrtf\sofa_cache.cpp" />
+    <ClCompile Include="src\hrtf\sofa_field.cpp" />
+    <ClCompile Include="src\io\adm_writer.cpp" />
+    <ClCompile Include="src\io\hdf5.cpp" />
+    <ClCompile Include="src\io\inflate.cpp" />
+    <ClCompile Include="src\io\npy.cpp" />
+    <ClCompile Include="src\io\npy_writer.cpp" />
+    <ClCompile Include="src\io\process.cpp" />
+    <ClCompile Include="src\io\wav_writer.cpp" />
+    <ClCompile Include="src\io\zip_reader.cpp" />
+    <ClCompile Include="src\joc_bitstream\joc_parser.cpp" />
+    <ClCompile Include="src\joc_core\objects16.cpp" />
+    <ClCompile Include="src\oamd\oamd_parser.cpp" />
+    <ClCompile Include="src\speaker\speaker_layout_lookup.cpp" />
+    <ClCompile Include="src\speaker\speaker_step.cpp" />
+    <ClCompile Include="src\stream\stream.cpp" />
+    <ClCompile Include="src\task\task.cpp" />
+    <ClCompile Include="src\telemetry\event_bus.cpp" />
+    <ClCompile Include="src\timeline\position_timeline.cpp" />
+    <!-- Public C API (the dll only upstream; JOC_STATIC makes it a plain lib). -->
+    <ClCompile Include="src\api\joc_api.cpp" />
+    <ClCompile Include="src\api\joc_stream_api.cpp" />
+    <ClCompile Include="src\api\joc_task_api.cpp" />
+    <!-- Dispatcher baseline: compiled for the target's own ISA, no /arch. -->
+    <ClCompile Include="src\simd\cpu_probe.cpp" />
+    <ClCompile Include="src\simd\dispatch.cpp" />
+    <ClCompile Include="src\simd\kernels_scalar.cpp" />
+    <!--
+      The CLI frontend.  Upstream builds it into joc_cli.exe out of the same
+      sources; it is part of the copy, it needs nothing but the library API, and
+      a static library keeps it inert (its main() is never referenced, so the
+      linker never pulls the object in) while the copy stays complete.
+    -->
+    <ClCompile Include="src\cli\joc_cli.cpp" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Platform)'=='x64'">
+    <ClCompile Include="src\simd\kernels_intrin_avx2.cpp">
+      <AdditionalOptions>/arch:AVX2 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ClCompile Include="src\simd\kernels_intrin_avx512.cpp">
+      <AdditionalOptions>/arch:AVX512 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="include\eac3joc_core.h" />
+    <ClInclude Include="include\joc_core.h" />
+    <ClInclude Include="include\joc_stream.h" />
+    <ClInclude Include="src\adm\adm_metadata.h" />
+    <ClInclude Include="src\adm\adm_tracks.h" />
+    <ClInclude Include="src\binaural\binaural_runtime.h" />
+    <ClInclude Include="src\eac3_transport\eac3_reader.h" />
+    <ClInclude Include="src\emdf\emdf_parser.h" />
+    <ClInclude Include="src\foundation\bit_reader.h" />
+    <ClInclude Include="src\foundation\fft.h" />
+    <ClInclude Include="src\foundation\fs_utf8.h" />
+    <ClInclude Include="src\foundation\geometry.h" />
+    <ClInclude Include="src\foundation\mini_json.h" />
+    <ClInclude Include="src\foundation\py_num.h" />
+    <ClInclude Include="src\foundation\sha256.h" />
+    <ClInclude Include="src\foundation\status.h" />
+    <ClInclude Include="src\hrtf\jochrtf.h" />
+    <ClInclude Include="src\hrtf\public_filterbank.h" />
+    <ClInclude Include="src\hrtf\rosella_model.h" />
+    <ClInclude Include="src\hrtf\rosella_renderer.h" />
+    <ClInclude Include="src\hrtf\sofa.h" />
+    <ClInclude Include="src\hrtf\sofa_cache.h" />
+    <ClInclude Include="src\hrtf\sofa_field.h" />
+    <ClInclude Include="src\io\adm_writer.h" />
+    <ClInclude Include="src\io\hdf5.h" />
+    <ClInclude Include="src\io\inflate.h" />
+    <ClInclude Include="src\io\npy.h" />
+    <ClInclude Include="src\io\npy_writer.h" />
+    <ClInclude Include="src\io\process.h" />
+    <ClInclude Include="src\io\wav_writer.h" />
+    <ClInclude Include="src\io\zip_reader.h" />
+    <ClInclude Include="src\joc_bitstream\joc_huffman_tables.h" />
+    <ClInclude Include="src\joc_bitstream\joc_parser.h" />
+    <ClInclude Include="src\joc_core\objects16.h" />
+    <ClInclude Include="src\joc_core\qmf_tables.h" />
+    <ClInclude Include="src\oamd\oamd_parser.h" />
+    <ClInclude Include="src\simd\cpu_probe.h" />
+    <ClInclude Include="src\simd\simd.h" />
+    <!-- src\simd\kernels_intrin_neon.cpp is excluded on every platform; see above. -->
+    <ClInclude Include="src\speaker\speaker_layout_lookup.h" />
+    <ClInclude Include="src\speaker\speaker_layouts.h" />
+    <ClInclude Include="src\speaker\speaker_step.h" />
+    <ClInclude Include="src\stream\stream.h" />
+    <ClInclude Include="src\task\task.h" />
+    <ClInclude Include="src\telemetry\event_bus.h" />
+    <ClInclude Include="src\timeline\position_timeline.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>
