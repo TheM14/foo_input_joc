@@ -2,8 +2,10 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <vector>
 
 // The kernel copy that is compiled into this component; see kernel/.
@@ -42,6 +44,7 @@ struct CoreApi {
                               std::uint32_t*) = joc_stream_push;
     joc_error(JOC_CALL* pull)(joc_stream*, joc_stream_buffer*, std::uint32_t*) = joc_stream_pull;
     joc_error(JOC_CALL* flush)(joc_stream*) = joc_stream_flush;
+    joc_error(JOC_CALL* reset)(joc_stream*) = joc_stream_reset;
     joc_error(JOC_CALL* status)(const joc_stream*, joc_stream_status_info*) = joc_stream_status;
     joc_error(JOC_CALL* destroy)(joc_stream*) = joc_stream_destroy;
     std::uint32_t(JOC_CALL* abi_version)() = joc_abi_version;
@@ -199,6 +202,7 @@ public:
                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
         return handle_ != INVALID_HANDLE_VALUE;
     }
+    bool is_open() const { return handle_ != INVALID_HANDLE_VALUE; }
     std::size_t read(void* destination, std::size_t bytes) {
         if (handle_ == INVALID_HANDLE_VALUE) return 0;
         DWORD got = 0;
@@ -206,6 +210,12 @@ public:
             return 0;
         }
         return got;
+    }
+    bool seek(std::uint64_t offset) {
+        if (handle_ == INVALID_HANDLE_VALUE) return false;
+        LARGE_INTEGER value{};
+        value.QuadPart = static_cast<LONGLONG>(offset);
+        return SetFilePointerEx(handle_, value, nullptr, FILE_BEGIN) != FALSE;
     }
     std::uint64_t size() const {
         LARGE_INTEGER value{};
@@ -227,6 +237,41 @@ const char* const kLayouts[] = {"2.0",   "3.0",   "3.1",   "4.0",   "5.0",   "5.
                                 "5.1.4", "6.1",   "7.0",   "7.1",   "7.1.2", "7.1.4", "9.1.4",
                                 "9.1.6", "22.2"};
 const unsigned kLayoutChannels[] = {2, 3, 4, 4, 5, 6, 8, 10, 7, 7, 8, 10, 12, 14, 16, 24};
+
+// Every ffmpeg child writes its diagnostics next to the component rather than into
+// whatever working directory the host process happens to have; separate files so
+// no child can truncate another's.
+std::wstring stderr_path_for(const wchar_t* name) {
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&speaker_channels), &self);
+    wchar_t path[4096] = {};
+    const DWORD length = GetModuleFileNameW(self, path, 4096);
+    if (length == 0) return std::wstring(name);
+    const std::wstring text(path, length);
+    const std::wstring::size_type slash = text.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring(name)
+                                      : text.substr(0, slash) + L"\\" + name;
+}
+
+// The time ffmpeg's -ss takes for a given source sample.  A seek always starts on
+// a syncframe boundary, so the sample is exactly representable in microseconds.
+std::wstring seek_time(std::uint64_t source_sample) {
+    if (source_sample == 0) return {};
+    wchar_t text[64] = {};
+    std::swprintf(text, 64, L"%.6f", static_cast<double>(source_sample) / 48000.0);
+    return text;
+}
+
+// Source sample a time offset names, rounded the way the core rounds a position
+// (pfc::rint64, i.e. llrint: to nearest, ties to even).
+std::int64_t sample_of_seconds(double seconds) {
+    if (!(seconds > 0.0)) return 0;  // also catches NaN
+    const double value = seconds * 48000.0;
+    if (value >= 9.0e18) return 9223372036854775807LL;
+    return static_cast<std::int64_t>(std::llrint(value));
+}
 
 }  // namespace
 
@@ -277,7 +322,8 @@ std::string resolve_hrtf_file(const Settings& settings) {
     return directory + "\\HRTF\\" + name;
 }
 
-FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
+FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes,
+                     std::uint64_t start_offset) {
     FileProbe probe;
     InputFile file;
     if (!file.open(path)) {
@@ -285,6 +331,15 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
         return probe;
     }
     const std::uint64_t size = file.size();
+    if (start_offset >= size) {
+        probe.detail = "file too small to be E-AC-3";
+        return probe;
+    }
+    if (start_offset != 0 && !file.seek(start_offset)) {
+        probe.detail = "cannot skip the leading tag area";
+        return probe;
+    }
+    const std::uint64_t stream_bytes = size - start_offset;
 
     // A Media Library scan calls this for every file, so the whole stream is
     // walked only when that is cheap; otherwise the first window is enough,
@@ -293,7 +348,7 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
     const std::size_t window =
         (max_scan_bytes != 0) ? max_scan_bytes : 256u * 1024u;
     std::vector<std::uint8_t> buffer(static_cast<std::size_t>(
-        (size < kFullWalkLimit && size > 0) ? size : window));
+        (stream_bytes < kFullWalkLimit && stream_bytes > 0) ? stream_bytes : window));
     const std::size_t got = file.read(buffer.data(), buffer.size());
     if (got < 8) {
         probe.detail = "file too small to be E-AC-3";
@@ -310,7 +365,7 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
     }
 
     std::uint64_t frames = 0;
-    if (buffer.size() == size) {
+    if (buffer.size() == stream_bytes) {
         std::size_t offset = 0;
         while (true) {
             const std::size_t bytes = joc_eac3::frame_bytes_at(buffer.data(), got, offset);
@@ -320,7 +375,7 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
         }
         probe.detail = "frame count walked over the whole file";
     } else if (scan.all_frames_same_size) {
-        frames = size / scan.first_frame_bytes;
+        frames = stream_bytes / scan.first_frame_bytes;
         probe.detail = "frame count extrapolated from a constant frame size";
     } else {
         // Variable frame size: count in the window and scale by the byte ratio.
@@ -333,7 +388,8 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes) {
             ++seen;
         }
         frames = (offset != 0) ? static_cast<std::uint64_t>(
-                                     (static_cast<double>(size) / static_cast<double>(offset)) *
+                                     (static_cast<double>(stream_bytes) /
+                                      static_cast<double>(offset)) *
                                      static_cast<double>(seen))
                                : 0;
         probe.detail = "frame count estimated from a variable frame size";
@@ -443,6 +499,7 @@ struct Engine::Impl {
     bool eac3_from_pipe = false;
     FfmpegPipe bed;
     Settings settings;
+    std::string input_path;
 
     // The metadata stream comes either from the file itself or from ffmpeg.
     std::size_t read_eac3(void* destination, std::size_t bytes) {
@@ -464,7 +521,191 @@ struct Engine::Impl {
     std::vector<float> bed_buffer;
     std::size_t bed_staged_bytes = 0;   // bytes staged at the front of bed_buffer
     std::vector<float> pull_buffer;
+
+    // Seek state.  seek_skip counts output frames still to be discarded: a seek
+    // restarts the inputs on the syncframe before the target, and the samples the
+    // renderer produces for the part already behind the target are dropped here.
+    std::uint64_t seek_skip = 0;
+    // Delivered-stream accounting: where the stream currently being delivered starts
+    // on the source timeline, how much of it has been handed over, and where it has
+    // to stop.  end_sample is the file's own end, so a binaural room tail cannot
+    // turn into playback time the file does not have.
+    std::uint64_t start_sample = 0;
+    std::uint64_t delivered = 0;
+    std::uint64_t end_sample = 0;   // 0 = no limit
+    // Syncframes of a container's metadata stream still to be read and thrown away.
+    // ffmpeg's input seek on a copy stream lands on the frame whose timestamp is
+    // at or after the target, which is not reliably the frame the bed restarts on,
+    // so a container seek re-reads the stream and drops the frames here instead.
+    std::uint64_t metadata_skip = 0;
+    bool at_end = false;                      // seek landed at or past the end
+    std::function<bool()> abort_check;
+    // Bare-stream syncframe index: offset of every syncframe within the stream
+    // (so index_base has to be added to get a file offset).  Filled by walking the
+    // file, and only as far as a seek asks for.
+    std::vector<std::uint64_t> frame_offsets;
+    std::uint64_t index_base = 0;              // file offset the stream starts at
+    std::uint64_t index_file_offset = 0;       // file offset the walk continues from
+    std::uint64_t index_stream_offset = 0;     // stream offset the walk continues from
+    bool index_complete = false;
+
+    void reset_feed_state() {
+        frames_queued = 0;
+        bed_frames_pushed = 0;
+        eac3_eof = false;
+        bed_eof = false;
+        flushed = false;
+        trace_count = 0;
+        read_calls = 0;
+        eac3_carry = 0;
+        bed_bytes_read = 0;
+        bed_staged_bytes = 0;
+        seek_skip = 0;
+        metadata_skip = 0;
+        start_sample = 0;
+        delivered = 0;
+        at_end = false;
+    }
+
+    void stop_inputs() {
+        bed.stop();
+        eac3_pipe.stop();
+        eac3.close();
+    }
+
+    void reset_index() {
+        frame_offsets.clear();
+        index_base = settings.stream_start_bytes;
+        index_file_offset = index_base;
+        index_stream_offset = 0;
+        index_complete = false;
+    }
+
+    // Grows the syncframe index until it holds `wanted` entries or the stream ends.
+    bool grow_frame_index(std::uint64_t wanted, std::string* error);
+    // Points the file at the syncframe `frame`, or reports at_end when the stream
+    // has fewer frames than that.
+    bool position_bare(std::uint64_t frame, std::string* error);
+    bool start_bed(std::uint64_t source_sample, std::string* error);
+    bool start_metadata(std::string* error);
 };
+
+bool Engine::Impl::grow_frame_index(std::uint64_t wanted, std::string* error) {
+    constexpr std::size_t kWindow = 256u * 1024u;
+    std::vector<std::uint8_t> buffer(kWindow);
+    while (frame_offsets.size() < wanted && !index_complete) {
+        if (abort_check != nullptr && !abort_check()) {
+            if (error != nullptr) *error = "the seek was aborted";
+            return false;
+        }
+        if (!eac3.is_open() && !eac3.open(input_path)) {
+            if (error != nullptr) *error = "cannot reopen the input file";
+            return false;
+        }
+        const std::uint64_t size = eac3.size();
+        if (index_file_offset + 4u > size) {
+            index_complete = true;
+            break;
+        }
+        if (!eac3.seek(index_file_offset)) {
+            if (error != nullptr) *error = "cannot position the input file";
+            return false;
+        }
+        const std::uint64_t remaining = size - index_file_offset;
+        const std::size_t want = static_cast<std::size_t>(
+            remaining < kWindow ? remaining : kWindow);
+        const std::size_t got = eac3.read(buffer.data(), want);
+        if (got < 4u) {
+            index_complete = true;
+            break;
+        }
+        std::size_t consumed = 0;
+        while (frame_offsets.size() < wanted) {
+            const std::size_t bytes = joc_eac3::frame_bytes_at(buffer.data(), got, consumed);
+            if (bytes == 0 || consumed + bytes > got) break;
+            frame_offsets.push_back(index_stream_offset + consumed);
+            consumed += bytes;
+        }
+        if (consumed == 0) {
+            // Not even one whole syncframe in a full window: the stream stops here.
+            index_complete = true;
+            break;
+        }
+        index_file_offset += consumed;
+        index_stream_offset += consumed;
+    }
+    return true;
+}
+
+bool Engine::Impl::position_bare(std::uint64_t frame, std::string* error) {
+    if (!grow_frame_index(frame + 1u, error)) return false;
+    if (frame >= frame_offsets.size()) {
+        // Past the last syncframe: the decoder contract asks for a successful seek
+        // that the next read() answers with end of stream.
+        at_end = true;
+        stop_inputs();
+        return true;
+    }
+    // Position check first: frame_offsets.size() is what bounds the index.
+    const std::uint64_t file_offset =
+        index_base + frame_offsets[static_cast<std::size_t>(frame)];
+    if (!eac3.is_open() && !eac3.open(input_path)) {
+        if (error != nullptr) *error = "cannot reopen the input file";
+        return false;
+    }
+    // The renderer rejects a stream that does not begin on a syncword and never
+    // resynchronises, so a mispositioned start has to fail loudly here rather than
+    // turn into silence at the end of the file.
+    std::uint8_t header[8] = {};
+    if (!eac3.seek(file_offset) || eac3.read(header, sizeof(header)) < 4u ||
+        joc_eac3::frame_bytes_at(header, sizeof(header), 0) == 0) {
+        if (error != nullptr) {
+            *error = "the syncframe index does not point at a syncframe (offset " +
+                     std::to_string(file_offset) + ")";
+        }
+        return false;
+    }
+    if (!eac3.seek(file_offset)) {
+        if (error != nullptr) *error = "cannot position the input file";
+        return false;
+    }
+    return true;
+}
+
+bool Engine::Impl::start_bed(std::uint64_t source_sample, std::string* error) {
+    // The 5.1 core PCM, exactly as the reference renderer's own core decode does
+    // it: 5.1 interleaved float32 at 48 kHz, the layout the renderer expects
+    // (L R C LFE Ls Rs).
+    // -drc_scale 0 -target_level 0: the bed is taken as stored, without the
+    // stream's dynrng or target-level metadata being applied by the decoder.
+    //
+    // -ss is an input option: the demuxer is positioned on the frame boundary and
+    // decoding starts there, so a seek costs the same wherever it lands.  The price is
+    // that the bed is carried by a decoder that started at the seek point rather than
+    // at the start of the file, which is a low-level, noise-like difference from a
+    // play-through rather than a misalignment: the position stays exact.
+    std::wstring input_arguments = L"-drc_scale 0 -target_level 0";
+    const std::wstring offset = seek_time(source_sample);
+    if (!offset.empty()) input_arguments += L" -ss " + offset;
+    std::wstring bed_arguments = L"-map 0:a:";
+    bed_arguments += std::to_wstring(settings.audio_index);
+    bed_arguments += L" -vn -ac 6 -ar 48000 -c:a pcm_f32le -f f32le -";
+    return bed.start(settings.ffmpeg_path, input_path, input_arguments, bed_arguments, "bed",
+                     stderr_path_for(L"joc_ffmpeg_bed.log"), error);
+}
+
+bool Engine::Impl::start_metadata(std::string* error) {
+    // Stream copy from the start of the track: the syncframes arrive byte for byte
+    // as they are stored, which is what the JOC metadata needs, and a seek then
+    // discards whole syncframes from the front (see metadata_skip) rather than
+    // asking ffmpeg to position the stream.
+    std::wstring stream_arguments = L"-map 0:a:";
+    stream_arguments += std::to_wstring(settings.audio_index);
+    stream_arguments += L" -vn -c:a copy -f eac3 -";
+    return eac3_pipe.start(settings.ffmpeg_path, input_path, std::wstring(), stream_arguments,
+                           "metadata", stderr_path_for(L"joc_ffmpeg_stream.log"), error,
+                           1u << 20);
+}
 
 Engine::Engine() : impl_(new Impl()) {}
 
@@ -475,21 +716,30 @@ Engine::~Engine() {
 
 unsigned Engine::channels() const { return impl_->channels; }
 
+void Engine::set_abort_check(std::function<bool()> check) { impl_->abort_check = std::move(check); }
+
+void Engine::set_length(double seconds) { impl_->end_sample = sample_of_seconds(seconds); }
+
 void Engine::stop() {
     Impl& impl = *impl_;
     if (impl.stream != nullptr && impl.api.destroy != nullptr) {
         impl.api.destroy(impl.stream);
         impl.stream = nullptr;
     }
-    impl.bed.stop();
-    impl.eac3_pipe.stop();
-    impl.eac3.close();
-    impl.eac3_from_pipe = false;
+    impl.stop_inputs();
+    impl.reset_feed_state();
 }
 
 bool Engine::start(const std::string& input_path, const Settings& settings, std::string* error) {
     Impl& impl = *impl_;
+    // initialize() may be called more than once on the same instance, and each call
+    // has the renderer and its inputs start from scratch.
+    stop();
     impl.settings = settings;
+    impl.input_path = input_path;
+    impl.reset_index();
+    impl.reset_feed_state();
+    impl.end_sample = sample_of_seconds(settings.length_seconds);
     impl.eac3_buffer.resize(kEac3Chunk);
     impl.bed_buffer.resize(kBedFramesChunk * kBedChannels);
 
@@ -511,6 +761,12 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
     if (!impl.eac3_from_pipe) {
         if (!impl.eac3.open(input_path)) {
             if (error != nullptr) *error = "cannot open the input file";
+            return false;
+        }
+        // A tag area in front of the stream is skipped here rather than by the
+        // renderer, which rejects a stream that does not begin on a syncword.
+        if (impl.index_base != 0 && !impl.eac3.seek(impl.index_base)) {
+            if (error != nullptr) *error = "cannot skip the leading tag area";
             return false;
         }
     }
@@ -590,51 +846,89 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
     // ffmpeg's stderr lands next to the component rather than in whatever working
     // directory the host process happens to have.  The two children write separate
     // files so neither can truncate the other's diagnostics.
-    const auto stderr_path_for = [](const wchar_t* name) {
-        HMODULE self = nullptr;
-        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCWSTR>(&speaker_channels), &self);
-        wchar_t path[4096] = {};
-        const DWORD length = GetModuleFileNameW(self, path, 4096);
-        if (length == 0) return std::wstring(name);
-        const std::wstring text(path, length);
-        const std::wstring::size_type slash = text.find_last_of(L"\\/");
-        return slash == std::wstring::npos ? std::wstring(name)
-                                          : text.substr(0, slash) + L"\\" + name;
-    };
+    if (!impl.start_bed(0, error)) return false;
+    if (impl.eac3_from_pipe && !impl.start_metadata(error)) return false;
+    return true;
+}
 
-    // The 5.1 core PCM, exactly as the reference renderer's own core decode does it:
-    // 5.1 interleaved float32 at 48 kHz, the layout the renderer expects
-    // (L R C LFE Ls Rs).
-    // -drc_scale 0 -target_level 0: the bed is taken as stored, without the stream's
-    // dynrng or target-level metadata being applied by the decoder.
-    std::wstring bed_arguments = L"-map 0:a:";
-    bed_arguments += std::to_wstring(settings.audio_index);
-    bed_arguments += L" -vn -ac 6 -ar 48000 -c:a pcm_f32le -f f32le -";
-    if (!impl.bed.start(settings.ffmpeg_path, input_path, L"-drc_scale 0 -target_level 0", bed_arguments, "bed",
-                        stderr_path_for(L"joc_ffmpeg_bed.log"), error)) {
+bool Engine::seek(double seconds, double total_seconds, std::string* error) {
+    Impl& impl = *impl_;
+    if (impl.stream == nullptr || impl.api.reset == nullptr) {
+        if (error != nullptr) *error = "the renderer is not running";
         return false;
     }
 
+    // Where the stream that is about to be delivered starts:
+    //
+    //   * the frame the target sits in, minus a pre-roll, so the renderer's own state
+    //     -- object timeline, matrix interpolation, room tail -- has converged by the
+    //     time the target itself is delivered.  Both inputs restart there, and the bed
+    //     is positioned with an input seek, which is what keeps the cost of a seek
+    //     independent of where it lands;
+    //   * the samples in front of the target are then dropped from the output, which is
+    //     what makes the delivery start exactly on the requested sample.
+    const std::int64_t target = sample_of_seconds(seconds);
+    std::int64_t wanted = target - static_cast<std::int64_t>(impl.settings.pipeline_delay_samples);
+    if (wanted < 0) wanted = 0;
+    const std::uint64_t target_frame = static_cast<std::uint64_t>(wanted) / kFrameSamples;
+    const std::uint64_t preroll = impl.settings.seek_preroll_frames;
+    const std::uint64_t frame = (target_frame > preroll) ? (target_frame - preroll) : 0;
+    const std::uint64_t first_sample = frame * kFrameSamples;
+    const std::uint64_t skip = static_cast<std::uint64_t>(wanted) - first_sample;
+
+    impl.stop_inputs();
+    impl.reset_feed_state();
+
     if (impl.eac3_from_pipe) {
-        // Stream copy: the syncframes arrive byte for byte as they are stored, which
-        // is what the JOC metadata needs.
-        std::wstring stream_arguments = L"-map 0:a:";
-        stream_arguments += std::to_wstring(settings.audio_index);
-        stream_arguments += L" -vn -c:a copy -f eac3 -";
-        if (!impl.eac3_pipe.start(settings.ffmpeg_path, input_path, L"", stream_arguments, "metadata",
-                                  stderr_path_for(L"joc_ffmpeg_stream.log"), error,
-                                  1u << 20)) {
-            return false;
+        // A container's frame count is not known before it is decoded, so the
+        // caller's duration is what says whether this lands past the end.
+        if (total_seconds > 0.0 && seconds >= total_seconds) {
+            impl.at_end = true;
+            joc_log::line("engine: seek %.6f s is at or past the end (%.6f s)", seconds,
+                          total_seconds);
         }
+    } else if (!impl.position_bare(frame, error)) {
+        return false;
     }
+
+    if (!impl.at_end) {
+        if (!impl.start_bed(first_sample, error)) return false;
+        if (impl.eac3_from_pipe) {
+            if (!impl.start_metadata(error)) return false;
+            impl.metadata_skip = frame;
+        }
+        impl.seek_skip = skip;
+        impl.start_sample = static_cast<std::uint64_t>(wanted);
+        impl.delivered = 0;
+    }
+
+    // joc_stream_reset keeps the renderer and its HRTF field: it drops the whole
+    // timeline, gain ramps, room tail and filter-bank history, which is exactly
+    // what a restart at another position needs.
+    const joc_error reset = impl.api.reset(impl.stream);
+    if (reset != JOC_OK) {
+        if (error != nullptr) {
+            *error = std::string("cannot reset the render stream: ") +
+                     error_text(impl.api, reset);
+        }
+        return false;
+    }
+    joc_log::line("engine: seek %.6f s -> source sample %lld, frames %llu.. from sample %llu, "
+                  "drop %llu sample(s)%s",
+                  seconds, static_cast<long long>(target),
+                  static_cast<unsigned long long>(frame),
+                  static_cast<unsigned long long>(first_sample),
+                  static_cast<unsigned long long>(impl.seek_skip),
+                  impl.at_end ? " (at end)" : "");
     return true;
 }
 
 std::size_t Engine::read(float* destination, std::size_t frames, std::string* error) {
     Impl& impl = *impl_;
     if (impl.stream == nullptr || frames == 0) return 0;
+    // A seek at or past the end of the file succeeds and leaves the next read to
+    // report end of stream.
+    if (impl.at_end) return 0;
     const bool trace = impl.trace_count < 6;
     ++impl.read_calls;
     if ((impl.read_calls % 50u) == 0u) {
@@ -672,10 +966,36 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
             // frame of the file unrendered.
             const std::size_t got = impl.read_eac3(impl.eac3_buffer.data() + impl.eac3_carry,
                                                    impl.eac3_buffer.size() - impl.eac3_carry);
-            const std::size_t total = impl.eac3_carry + got;
+            std::size_t total = impl.eac3_carry + got;
             if (total == 0) {
                 impl.eac3_eof = true;
             } else {
+                // Syncframes in front of a seek target are thrown away before
+                // anything is interpreted.  They are dropped a whole window at a
+                // time, so only as much of the stream is read as the skip needs.
+                if (impl.metadata_skip != 0) {
+                    std::size_t dropped = 0;
+                    while (impl.metadata_skip != 0) {
+                        const std::size_t bytes =
+                            joc_eac3::frame_bytes_at(impl.eac3_buffer.data(), total, dropped);
+                        if (bytes == 0 || dropped + bytes > total) break;
+                        dropped += bytes;
+                        --impl.metadata_skip;
+                    }
+                    if (dropped != 0) {
+                        total -= dropped;
+                        std::memmove(impl.eac3_buffer.data(),
+                                     impl.eac3_buffer.data() + dropped, total);
+                    }
+                    if (impl.metadata_skip != 0) {
+                        // The window ended inside the part to be skipped: keep what
+                        // is left and come back with the next read.
+                        impl.eac3_carry = total;
+                        if (got == 0) impl.eac3_eof = true;
+                        continue;
+                    }
+                }
+
                 std::size_t offset = 0;
                 std::uint64_t complete = 0;
                 while (true) {
@@ -804,12 +1124,37 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
             return 0;
         }
         if (produced != 0u) {
+            std::size_t count = produced;
+            if (impl.seek_skip != 0) {
+                // The renderer had to be fed from before the seek target, so the
+                // samples it produces for that part are dropped before anything
+                // reaches the caller: the first sample handed over is the target.
+                const std::size_t drop = (impl.seek_skip < count)
+                                             ? static_cast<std::size_t>(impl.seek_skip)
+                                             : count;
+                impl.seek_skip -= drop;
+                count -= drop;
+                if (count != 0) {
+                    std::memmove(destination, destination + drop * impl.channels,
+                                 count * impl.channels * sizeof(float));
+                }
+                if (count == 0) continue;  // the whole pull was pre-roll
+            }
+            // The renderer's binaural room tail is not part of the file: the stream
+            // ends where the file ends, not later.
+            if (impl.end_sample != 0) {
+                const std::uint64_t from = impl.start_sample + impl.delivered;
+                if (from >= impl.end_sample) return 0;
+                const std::uint64_t left = impl.end_sample - from;
+                if (left < count) count = static_cast<std::size_t>(left);
+            }
+            impl.delivered += count;
             if (trace) {
                 ++impl.trace_count;
-                joc_log::line("engine: pulled %u frame(s) on the %u%s attempt", produced,
+                joc_log::line("engine: pulled %u frame(s) on the %u%s attempt", count,
                                 impl.trace_count, impl.trace_count == 1 ? "st" : "th");
             }
-            return produced;
+            return count;
         }
 
         // Nothing more can arrive once the metadata stream is drained and the bed

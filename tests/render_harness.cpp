@@ -14,15 +14,33 @@
 //     --tail S                    binaural tail seconds (default 5)
 //     --ffmpeg PATH               default ffmpeg
 //     --max-frames N              stop after N output frames (0 = all)
+//     --max-input-frames N        stop feeding the renderer after N syncframes
+//     --seek-to S                 seek to S seconds before reading (repeatable;
+//                                 only the last one before reading takes effect)
+//     --seek-at N:S               seek to S seconds once N output frames have been
+//                                 written (repeatable; N = 0 seeks before reading)
+//     --total-seconds S           the duration seek() is told about (0 = unknown)
+//     --length S                  cut the delivered stream at S seconds (the file's
+//                                 own duration; the renderer still renders its tail)
+//     --pipeline-delay N          delay a seek compensates for, in samples
+//     --preroll-frames N          syncframes fed before the target frame
+//     --cycles N                  render the file N times in this process, in sequence
+//     --parallel N                render it N times at once, in separate threads
+//
+// The two constants a seek uses are overridable so they can be checked by measurement.
+//
+// --cycles and --parallel cover what one render per process cannot: the renderer and the
+// compiled-HRTF cache live as long as the process does, and foobar2000 starts the next
+// file while the current one is still being read.
 //
 // It exists because the plugin's engine (src/joc_decode.*) has no foobar2000
-// dependency: the very code that plays in foobar2000 can be run here and its
-// output compared against the reference renderer, which is what the bit-exactness
-// contract is about.  The WAV header mirrors the renderer's own writer: a simple
-// IEEE-float header up to two channels, WAVE_FORMAT_EXTENSIBLE above that with a
-// channel mask of zero.
+// dependency: the very code that plays in foobar2000 can be run here, against the
+// reference renderer or against the same engine's continuous render.  The WAV header
+// mirrors the renderer's own writer: a simple IEEE-float header up to two channels,
+// WAVE_FORMAT_EXTENSIBLE above that with a channel mask of zero.
 
 #include <cstdio>
+#include <thread>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -44,6 +62,16 @@ struct Options {
     double tail_seconds = 5.0;
     std::uint64_t max_frames = 0;
     std::uint64_t max_input_frames = 0;
+    std::vector<double> seeks_before;                       // --seek-to
+    std::vector<std::pair<std::uint64_t, double>> seeks_at;  // --seek-at
+    double total_seconds = 0.0;
+    double length_seconds = 0.0;   // --length: cut the delivered stream here
+    std::uint32_t pipeline_delay = joc_decode::kJocSeekPipelineDelaySamples;
+    std::uint32_t preroll_frames = joc_decode::kJocSeekPrerollFrames;
+    bool container = false;
+    unsigned audio_index = 0;
+    unsigned cycles = 0;      // --cycles N: N renders in one process, in sequence
+    unsigned parallel = 0;    // --parallel N: N renders at once, in one process
 };
 
 void put_u16(std::string* out, unsigned value) {
@@ -111,6 +139,26 @@ bool parse(int argc, char** argv, Options* options) {
         else if (arg == "--tail") options->tail_seconds = std::atof(next().c_str());
         else if (arg == "--max-frames") options->max_frames = std::strtoull(next().c_str(), nullptr, 10);
         else if (arg == "--max-input-frames") options->max_input_frames = std::strtoull(next().c_str(), nullptr, 10);
+        else if (arg == "--seek-to") options->seeks_before.push_back(std::atof(next().c_str()));
+        else if (arg == "--total-seconds") options->total_seconds = std::atof(next().c_str());
+        else if (arg == "--length") options->length_seconds = std::atof(next().c_str());
+        else if (arg == "--pipeline-delay") options->pipeline_delay = static_cast<std::uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (arg == "--preroll-frames") options->preroll_frames = static_cast<std::uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (arg == "--container") options->container = true;
+        else if (arg == "--cycles") options->cycles = static_cast<unsigned>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (arg == "--parallel") options->parallel = static_cast<unsigned>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (arg == "--audio-index") options->audio_index = static_cast<unsigned>(std::strtoul(next().c_str(), nullptr, 10));
+        else if (arg == "--seek-at") {
+            const std::string value = next();
+            const std::string::size_type colon = value.find(':');
+            if (colon == std::string::npos) {
+                std::fprintf(stderr, "render_harness: --seek-at wants <frames>:<seconds>\n");
+                return false;
+            }
+            options->seeks_at.emplace_back(
+                std::strtoull(value.substr(0, colon).c_str(), nullptr, 10),
+                std::atof(value.substr(colon + 1).c_str()));
+        }
         else if (arg == "--help" || arg == "-h") return false;
         else {
             std::fprintf(stderr, "render_harness: unknown argument %s\n", arg.c_str());
@@ -120,47 +168,26 @@ bool parse(int argc, char** argv, Options* options) {
     return !options->input.empty() && !options->output.empty();
 }
 
-}  // namespace
 
-int main(int argc, char** argv) {
-    Options options;
-    if (!parse(argc, argv, &options)) {
-        std::fprintf(stderr,
-                     "usage: render_harness --input <eac3> --output <wav> [--mode binaural|speaker]\n"
-                     "       [--layout NAME] [--hrtf-source sofa|rosella] [--hrtf PATH]\n"
-                     "       [--gain-db X] [--tail S] [--ffmpeg path] [--max-frames N]\n"
-                     "       [--max-input-frames N]\n");
-        return 2;
-    }
-
-    joc_decode::Settings settings;
-    settings.output = (options.mode == "speaker") ? joc_decode::Output::kSpeaker
-                                                  : joc_decode::Output::kBinaural;
-    settings.speaker_layout = options.layout;
-    settings.hrtf_source = (options.hrtf_source == "rosella") ? joc_decode::HrtfSource::kRosella
-                                                             : joc_decode::HrtfSource::kSofa;
-    settings.hrtf_file = options.hrtf;
-    settings.gain_db = options.gain_db;
-    settings.tail_seconds = options.tail_seconds;
-    settings.ffmpeg_path = options.ffmpeg;
-    settings.input_frame_limit = options.max_input_frames;
-
+// One render: everything the component does for one file from start to stop.
+// Returns false with *error set when the engine reports a failure.
+bool render_once(const joc_decode::Settings& settings, const Options& options,
+                 const std::string& output, std::string* error) {
     joc_decode::Engine engine;
-    std::string error;
-    if (!engine.start(options.input, settings, &error)) {
-        std::fprintf(stderr, "render_harness: engine start failed: %s\n", error.c_str());
-        return 1;
-    }
+    if (!engine.start(options.input, settings, error)) return false;
     const unsigned channels = engine.channels();
     if (channels == 0) {
-        std::fprintf(stderr, "render_harness: engine reported zero channels\n");
-        return 1;
+        *error = "engine reported zero channels";
+        return false;
+    }
+    for (const double seconds : options.seeks_before) {
+        if (!engine.seek(seconds, options.total_seconds, error)) return false;
     }
 
-    std::FILE* file = std::fopen(options.output.c_str(), "wb");
+    std::FILE* file = std::fopen(output.c_str(), "wb");
     if (file == nullptr) {
-        std::fprintf(stderr, "render_harness: cannot write %s\n", options.output.c_str());
-        return 1;
+        *error = "cannot write " + output;
+        return false;
     }
     // The header carries the length, so write a placeholder and come back to it.
     const std::string header = wav_header(channels, 48000, 0);
@@ -170,19 +197,27 @@ int main(int argc, char** argv) {
     std::vector<float> buffer(kChunk * channels);
     std::uint64_t frames_written = 0;
     double peak = 0.0;
+    std::vector<char> applied(options.seeks_at.size(), 0);
     for (;;) {
+        for (std::size_t i = 0; i < options.seeks_at.size(); ++i) {
+            if (applied[i] != 0 || options.seeks_at[i].first > frames_written) continue;
+            applied[i] = 1;
+            if (!engine.seek(options.seeks_at[i].second, options.total_seconds, error)) {
+                std::fclose(file);
+                return false;
+            }
+        }
         std::size_t want = kChunk;
         if (options.max_frames != 0) {
             if (frames_written >= options.max_frames) break;
             const std::uint64_t left = options.max_frames - frames_written;
             if (left < want) want = static_cast<std::size_t>(left);
         }
-        const std::size_t frames = engine.read(buffer.data(), want, &error);
+        const std::size_t frames = engine.read(buffer.data(), want, error);
         if (frames == 0) {
-            if (!error.empty()) {
-                std::fprintf(stderr, "render_harness: read failed: %s\n", error.c_str());
+            if (!error->empty()) {
                 std::fclose(file);
-                return 1;
+                return false;
             }
             break;
         }
@@ -201,9 +236,83 @@ int main(int argc, char** argv) {
     std::fwrite(final_header.data(), 1, final_header.size(), file);
     std::fclose(file);
 
-    std::printf("render_harness: %s -> %s\n", options.input.c_str(), options.output.c_str());
-    std::printf("  channels=%u frames=%llu samples_per_channel=%llu peak=%.9f\n", channels,
-                static_cast<unsigned long long>(frames_written),
+    std::printf("render_harness: %s -> %s\n", options.input.c_str(), output.c_str());
+    std::printf("  channels=%u frames=%llu peak=%.9f\n", channels,
                 static_cast<unsigned long long>(frames_written), peak);
+    return true;
+}
+
+std::string numbered(const std::string& output, unsigned index) {
+    return output + "." + std::to_string(index) + ".wav";
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    Options options;
+    if (!parse(argc, argv, &options)) {
+        std::fprintf(stderr,
+                     "usage: render_harness --input <eac3> --output <wav> [--mode binaural|speaker]\n"
+                     "       [--layout NAME] [--hrtf-source sofa|rosella] [--hrtf PATH]\n"
+                     "       [--gain-db X] [--tail S] [--ffmpeg path] [--max-frames N]\n"
+                     "       [--max-input-frames N] [--seek-to S] [--seek-at N:S]\n"
+                     "       [--total-seconds S] [--pipeline-delay N] [--preroll-frames N]\n"
+                     "       [--container] [--audio-index N] [--length S]\n"
+                     "       [--cycles N] [--parallel N]\n");
+        return 2;
+    }
+
+    joc_decode::Settings settings;
+    settings.output = (options.mode == "speaker") ? joc_decode::Output::kSpeaker
+                                                  : joc_decode::Output::kBinaural;
+    settings.speaker_layout = options.layout;
+    settings.hrtf_source = (options.hrtf_source == "rosella") ? joc_decode::HrtfSource::kRosella
+                                                             : joc_decode::HrtfSource::kSofa;
+    settings.hrtf_file = options.hrtf;
+    settings.gain_db = options.gain_db;
+    settings.tail_seconds = options.tail_seconds;
+    settings.ffmpeg_path = options.ffmpeg;
+    settings.input_frame_limit = options.max_input_frames;
+    settings.pipeline_delay_samples = options.pipeline_delay;
+    settings.seek_preroll_frames = options.preroll_frames;
+    settings.length_seconds = options.length_seconds;
+    settings.input_kind = options.container ? joc_decode::InputKind::kContainer
+                                           : joc_decode::InputKind::kBare;
+    settings.audio_index = options.audio_index;
+
+    std::string error;
+    if (options.parallel != 0) {
+        // The same file rendered by several engines at once, which is what a track
+        // change looks like from the engine's side: foobar2000 starts the next file
+        // while the current one is still being read.
+        std::vector<std::thread> threads;
+        std::vector<std::string> errors(options.parallel);
+        for (unsigned i = 0; i < options.parallel; ++i) {
+            threads.emplace_back([&, i] {
+                if (!render_once(settings, options, numbered(options.output, i), &errors[i])) {
+                    std::fprintf(stderr, "render_harness: parallel %u: %s\n", i,
+                                 errors[i].c_str());
+                }
+            });
+        }
+        for (std::thread& thread : threads) thread.join();
+        for (const std::string& text : errors) {
+            if (!text.empty()) return 1;
+        }
+        return 0;
+    }
+
+    const unsigned cycles = (options.cycles == 0) ? 1 : options.cycles;
+    for (unsigned cycle = 0; cycle < cycles; ++cycle) {
+        // Every cycle is a fresh engine in the same process: the compiled-HRTF cache
+        // and everything else the renderer keeps per process is reused, exactly as it
+        // is when a second file is played in the same foobar2000 session.
+        error.clear();
+        const std::string output = (cycles == 1) ? options.output : numbered(options.output, cycle);
+        if (!render_once(settings, options, output, &error)) {
+            std::fprintf(stderr, "render_harness: cycle %u: %s\n", cycle, error.c_str());
+            return 1;
+        }
+    }
     return 0;
 }

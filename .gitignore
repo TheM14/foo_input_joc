@@ -29,3 +29,6 @@ rosella_kernels.npz
 
 # The component writes its own log next to the DLL
 joc_decoder.log
+
+# Measurement record: local working notes, kept on disk and never published.
+VERIFICATION.md

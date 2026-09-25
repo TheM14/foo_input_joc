@@ -11,9 +11,11 @@
 #include <SDK/audio_chunk.h>
 #include <SDK/exception_io.h>
 #include <SDK/file_info.h>
+#include <SDK/file_info_impl.h>
 #include <SDK/input.h>
 #include <SDK/input_file_type.h>
 #include <SDK/input_impl.h>
+#include <SDK/tag_processor.h>
 
 #include <cstring>
 #include <string>
@@ -30,6 +32,18 @@ namespace {
 constexpr std::size_t kSniffBytes = 256u * 1024u;
 constexpr std::size_t kRunFrames = 4096u;
 constexpr unsigned kSampleRate = 48000;
+
+// Largest magnitude in a block, for the delivery check in decode_run().
+template <typename Sample>
+double peak_of(const Sample* values, std::size_t count) {
+    double peak = 0.0;
+    for (std::size_t i = 0; i < count; ++i) {
+        const double value =
+            values[i] < Sample(0) ? -static_cast<double>(values[i]) : static_cast<double>(values[i]);
+        if (value > peak) peak = value;
+    }
+    return peak;
+}
 
 // Identity in the decoder priority table.
 
@@ -52,12 +66,130 @@ std::string file_name_of(const std::string& path) {
     return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 
+// ---------------------------------------------------------------------------
+// Tags of a file this component has taken over.
+//
+// An MP4/M4A keeps its tags in its own metadata box, and the component that knows
+// how to read and write them is the container reader the core already ships.
+// Claiming a file for decoding must not take it away from that reader, and the SDK
+// has no "decode with me, ask someone else for tags" arrangement -- whichever
+// entry answers open() answers for everything.  So the information read and write
+// paths are forwarded to whichever other entry claims the file, and only the tags
+// of its answer are merged into ours: the technical information stays this
+// component's own, which is what tells a user the file is JOC rather than plain
+// E-AC-3.
+// ---------------------------------------------------------------------------
+
+// Entries other than this one that claim the path, in the user's own decoding
+// order.  Ourselves is never in the list: an open forwarded back here would enter
+// open() again, for ever.
+void forwarding_candidates(const char* url, pfc::list_t<input_entry::ptr>& out) {
+    out.remove_all();
+    input_manager_v3::ptr manager;
+    if (input_manager_v3::tryGet(manager)) {
+        manager->get_enabled_inputs(out);
+    } else {
+        input_entry::g_find_inputs_by_path_ex(out, url,
+                                              [](input_entry::ptr) { return true; });
+    }
+    const char* dot = std::strrchr(url, '.');
+    const char* extension = (dot != nullptr) ? dot + 1 : "";
+    const GUID self = g_decoder_guid;
+    for (t_size index = out.get_count(); index-- > 0;) {
+        input_entry::ptr entry = out[index];
+        if (entry->get_guid_() == self || !entry->is_our_path(url, extension)) {
+            out.remove_by_idx(index);
+        }
+    }
+}
+
+// Opens the file again through another entry, for information reading or writing.
+// The file is left unopened on our side, so the other entry can have it to itself.
+template <typename t_interface>
+bool open_forwarded(service_ptr_t<t_interface>& out, const GUID& what_for, const char* url,
+                    abort_callback& abort, pfc::string8* name) {
+    out.release();
+    pfc::list_t<input_entry::ptr> candidates;
+    forwarding_candidates(url, candidates);
+    if (candidates.get_count() == 0) return false;
+    try {
+        GUID used = pfc::guid_null;
+        service_ptr opened = input_entry::g_open_from_list(candidates, what_for, nullptr, url,
+                                                           nullptr, abort, &used);
+        if (!opened.is_valid() || !opened->service_query_t(out)) return false;
+        if (name != nullptr) {
+            input_entry::ptr entry = input_entry::g_find_by_guid(used);
+            *name = entry.is_valid() ? entry->get_name_() : "another component";
+        }
+        return true;
+    } catch (const pfc::exception& error) {
+        joc_log::line("decoder: no other component answers for this file's tags: %s",
+                      error.what());
+        return false;
+    }
+}
+
+// Bytes in front of the E-AC-3 stream, which is where a tagging tool puts an
+// ID3v2 tag.  The renderer refuses a stream that does not begin on a syncword and
+// never resynchronises, so the walk and the feed both have to start after it.
+t_filesize leading_tag_bytes(file::ptr const& source, abort_callback& abort) {
+    if (!source.is_valid()) return 0;
+    try {
+        if (source->get_position(abort) != 0) source->seek(0, abort);
+        return tag_processor::skip_id3v2(source, abort);
+    } catch (const pfc::exception& error) {
+        joc_log::line("decoder: cannot inspect the area in front of the stream: %s",
+                      error.what());
+        return 0;
+    }
+}
+
+// Tags read straight from the file, for a bare stream that no other component
+// claims: an ID3v2 tag in front of the syncframes, or an APEv2/ID3v1 tag behind
+// them.  Neither is part of E-AC-3, so a tag that is there was written by a
+// tagging tool and is worth showing.
+void read_local_tags(file::ptr const& source, file_info& info, abort_callback& abort) {
+    if (!source.is_valid()) return;
+    bool found = false;
+    try {
+        source->seek(0, abort);
+        tag_processor::read_id3v2(source, info, abort);
+        found = true;
+    } catch (const pfc::exception&) {
+        // No leading tag; the trailing one is still worth a look.
+    }
+    try {
+        tag_processor::read_trailing(source, info, abort);
+        found = true;
+    } catch (const pfc::exception&) {
+    }
+    if (found) {
+        joc_log::line("decoder: %u tag field(s) read from the file itself",
+                      static_cast<unsigned>(info.meta_get_count()));
+    }
+}
+
 class input_joc : public input_stubs {
 public:
     void open(service_ptr_t<file> hint, const char* path, t_input_open_reason reason,
               abort_callback& abort) {
-        if (reason == input_open_info_write) throw exception_tagging_unsupported();
         m_path = (path != nullptr) ? path : "";
+
+        if (reason == input_open_info_write) {
+            // Writing tags belongs to whoever owns the file's format, and that is
+            // not this component: its inputs are two ffmpeg children and the JOC
+            // renderer, none of which writes anything.  The file is deliberately
+            // left unopened here, because a write-mode handle of ours would make
+            // the writer that replaces it fail on a sharing violation.
+            m_write_only = true;
+            if (!open_forwarded(m_forward_writer, input_info_writer::class_guid, m_path.c_str(),
+                                abort, &m_forward_name)) {
+                throw exception_tagging_unsupported();
+            }
+            joc_log::line("decoder: open \"%s\" reason=2 tags: written by %s", m_path.c_str(),
+                          m_forward_name.c_str());
+            return;
+        }
 
         service_ptr_t<file> source = hint;
         input_open_file_helper(source, path, reason, abort);
@@ -78,7 +210,31 @@ public:
 
         if (joc_container::is_container_extension(extension)) {
             open_container(extension);
-            return;
+        } else {
+            open_bare(abort);
+        }
+
+        // Whatever else happens, the tags of this file are read by the component
+        // that owns its format; failing to find one is not fatal, the technical
+        // information below is still worth showing.
+        if (!open_forwarded(m_forward_reader, input_info_reader::class_guid, m_path.c_str(), abort,
+                            &m_forward_name)) {
+            joc_log::line("decoder: no other component reads this file's tags");
+        } else {
+            joc_log::line("decoder: tags for \"%s\" are read by %s", m_path.c_str(),
+                          m_forward_name.c_str());
+        }
+    }
+
+    // A bare stream is either read from the file or handed back.  One thing has to
+    // happen first: a tag area in front of the syncframes is not part of the
+    // stream, and treating it as one would hand the file to the built-in decoder,
+    // which plays it without the Atmos objects.
+    void open_bare(abort_callback& abort) {
+        m_stream_start = leading_tag_bytes(m_file, abort);
+        if (m_stream_start != 0) {
+            joc_log::line("decoder: %llu byte(s) of tags in front of the stream are skipped",
+                          static_cast<unsigned long long>(m_stream_start));
         }
 
         pfc::array_t<t_uint8> buffer;
@@ -86,9 +242,8 @@ public:
         const std::size_t got = m_file->read(buffer.get_ptr(), kSniffBytes, abort);
         const joc_eac3::ScanResult scan = joc_eac3::scan(buffer.get_ptr(), got, 8);
 
-        joc_log::line("decoder: open \"%s\" reason=%d bytes=%llu frames=%llu with_joc=%llu",
-                        m_path.c_str(), static_cast<int>(reason),
-                        static_cast<unsigned long long>(got),
+        joc_log::line("decoder: open \"%s\" reason=1 bytes=%llu frames=%llu with_joc=%llu",
+                        m_path.c_str(), static_cast<unsigned long long>(got),
                         static_cast<unsigned long long>(scan.frames_examined),
                         static_cast<unsigned long long>(scan.frames_with_joc));
 
@@ -137,8 +292,18 @@ public:
     }
 
     void get_info(file_info& info, abort_callback& abort) {
-        (void)abort;
-        const joc_decode::FileProbe probe = joc_decode::probe_file(m_native_path.get_ptr());
+        if (m_write_only) {
+            // An instance opened to write tags is the writer's reader: what it
+            // reports is exactly what the caller has just written.
+            if (m_forward_writer.is_valid()) {
+                m_forward_writer->get_info(0, info, abort);
+                return;
+            }
+            throw exception_tagging_unsupported();
+        }
+
+        const joc_decode::FileProbe probe =
+            joc_decode::probe_file(m_native_path.get_ptr(), 0, m_stream_start);
         const joc_decode::Settings settings = joc_settings::current();
 
         // A container knows its own duration even though the E-AC-3 syncframes are
@@ -171,6 +336,10 @@ public:
         info.info_set_int("bitspersample", 32);
         info.info_set("bitspersample_extra", "floating-point");
         info.set_length(duration);
+        m_length = duration;
+        // The renderer keeps its room tail, but the stream this component hands over
+        // ends where the file ends: the tail is rendering, not playback time.
+        m_engine.set_length(duration);
         if (duration > 0.0) {
             const t_filesize bytes = m_file.is_valid() ? m_file->get_size(abort) : filesize_invalid;
             if (bytes != filesize_invalid && bytes > 0) {
@@ -194,6 +363,32 @@ public:
                           m_container.audio_index);
             info.info_set("joc_container", text);
         }
+
+        // The file's own reader supplies the tags; nothing above this line is one.
+        // Only the metadata is taken over -- its technical information (E-AC-3,
+        // 6 channels, the stream's own bitrate) would replace this component's,
+        // which is the part that says whether the file is JOC.
+        bool have_tags = false;
+        if (m_forward_reader.is_valid()) {
+            try {
+                file_info_impl tags;
+                m_forward_reader->get_info(0, tags, abort);
+                info.copy_meta(tags);
+                have_tags = tags.meta_get_count() != 0;
+                joc_log::line("decoder: %u tag field(s) from %s",
+                              static_cast<unsigned>(tags.meta_get_count()),
+                              m_forward_name.c_str());
+            } catch (const pfc::exception& error) {
+                joc_log::line("decoder: reading this file's own tags failed: %s", error.what());
+            }
+        }
+        // A reader that answers for the format but has nothing to say about a bare
+        // stream is common -- ffmpeg's AC-3 decoder reads no tags at all -- while
+        // the file may still carry an ID3v2 or APEv2 tag a tagging tool wrote.
+        if (!have_tags && m_input_kind == joc_decode::InputKind::kBare) {
+            read_local_tags(m_file, info, abort);
+        }
+
         joc_log::line("decoder: get_info duration=%.3f s frames=%llu channels=%u render=%s%s",
                       duration, static_cast<unsigned long long>(frames), channels, render.c_str(),
                       container ? " (container)" : "");
@@ -201,6 +396,7 @@ public:
 
     t_filestats2 get_stats2(uint32_t flags, abort_callback& abort) {
         if (m_file.is_valid()) return m_file->get_stats2_(flags, abort);
+        if (m_forward_writer.is_valid()) return m_forward_writer->get_stats2_(nullptr, flags, abort);
         throw exception_io_unsupported_format();
     }
 
@@ -209,6 +405,8 @@ public:
         m_settings = joc_settings::current();
         m_settings.input_kind = m_input_kind;
         m_settings.audio_index = m_audio_index;
+        m_settings.stream_start_bytes = m_stream_start;
+        m_settings.length_seconds = m_length;
         joc_log::line("decoder: initialize flags=0x%X settings: %s", flags,
                         joc_settings::describe(m_settings).c_str());
 
@@ -229,6 +427,7 @@ public:
         m_buffer.resize(kRunFrames * m_channels);
         m_frames_delivered = 0;
         m_reported = false;
+        m_delivery_mismatches = 0;
         joc_log::line("decoder: engine ready, %u output channel(s), %u frames per read",
                         m_channels, static_cast<unsigned>(kRunFrames));
     }
@@ -242,50 +441,98 @@ public:
                 joc_log::line("decoder: read failed: %s", error.c_str());
                 throw exception_io_data(error.c_str());
             }
-            joc_log::line("decoder: end of stream after %llu frames",
-                            static_cast<unsigned long long>(m_frames_delivered));
+            joc_log::line("decoder: end of stream after %llu frames%s",
+                            static_cast<unsigned long long>(m_frames_delivered),
+                            m_delivery_mismatches == 0 ? ""
+                                                       : " (the delivery changed samples)");
             return false;
         }
 
-        chunk.set_data_size(frames * m_channels);
-        chunk.set_channels(m_channels, audio_chunk::g_guess_channel_config(m_channels));
-        chunk.set_sample_rate(kSampleRate);
-        chunk.set_sample_count(frames);
-        std::memcpy(chunk.get_data(), m_buffer.data(),
-                    frames * m_channels * sizeof(audio_sample));
+        // The renderer produces float32 and a chunk holds audio_sample, which is float on
+        // 32-bit builds and double on 64-bit ones (SDK audio_math.h): the samples are
+        // converted, not copied.  set_data_32() is the SDK's conversion for a float32
+        // source, and it sets the channel count, the sample rate and the sample count.
+        chunk.set_data_32(m_buffer.data(), frames, m_channels, kSampleRate);
 
         m_frames_delivered += frames;
+        // A delivery that mangled the samples would be heard as noise rather than reported
+        // as a failure, so every chunk is checked: the conversion is exact, and the peak of
+        // what the chunk holds has to equal the peak of what the renderer produced.
+        const double produced = peak_of(m_buffer.data(), frames * m_channels);
+        const double delivered =
+            peak_of(chunk.get_data(), chunk.get_sample_count() * chunk.get_channels());
+        if (delivered > produced + 1e-6 + produced * 1e-6 ||
+            delivered < produced - 1e-6 - produced * 1e-6) {
+            ++m_delivery_mismatches;
+            if (m_delivery_mismatches == 1) {
+                joc_log::line("decoder: delivery changed the samples: peak %.9f produced, "
+                                "%.9f delivered",
+                                produced, delivered);
+            }
+        }
         if (!m_reported) {
             m_reported = true;
-            float peak = 0.0f;
-            for (std::size_t i = 0; i < frames * m_channels; ++i) {
-                const float value = m_buffer[i] < 0.0f ? -m_buffer[i] : m_buffer[i];
-                if (value > peak) peak = value;
-            }
-            joc_log::line("decoder: first %llu frames delivered (%u ch), peak %.6f",
-                            static_cast<unsigned long long>(frames), m_channels,
-                            static_cast<double>(peak));
+            joc_log::line("decoder: first %llu frames delivered (%u ch), peak %.6f, "
+                            "delivered peak %.6f",
+                            static_cast<unsigned long long>(frames), m_channels, produced,
+                            delivered);
         }
         return true;
     }
 
-    void decode_seek(double, abort_callback&) {
-        // The renderer is stateful and has no seek; can_seek() says so.
-        throw exception_io_unsupported_format();
+    void decode_seek(double seconds, abort_callback& abort) {
+        // Walking the syncframe index of a long file is the only part of a seek
+        // that can take a while, and it polls this.
+        m_engine.set_abort_check([&abort] { return !abort.is_aborting(); });
+        std::string error;
+        const bool ok = m_engine.seek(seconds, m_length, &error);
+        m_engine.set_abort_check(nullptr);
+        if (!ok) {
+            // An aborted seek reports itself as an abort, not as a decode failure.
+            abort.check();
+            joc_log::line("decoder: seek to %.6f s failed: %s", seconds, error.c_str());
+            throw exception_io_data(error.c_str());
+        }
+        // The position reporting and the first-read statistics belong to the run
+        // that starts here, not to the one that was interrupted.
+        m_frames_delivered = 0;
+        m_reported = false;
+        m_delivery_mismatches = 0;
+        joc_log::line("decoder: seek to %.6f s, the next read starts at the target", seconds);
     }
 
-    bool decode_can_seek() { return false; }
+    bool decode_can_seek() { return true; }
 
     size_t extended_param(const GUID& type, size_t arg1, void* arg2, size_t arg2size) {
         (void)arg1;
         (void)arg2;
         (void)arg2size;
+        // A seek restarts both ffmpeg children and replays the renderer's warm-up,
+        // so it is worth avoiding the ones the core would only make speculatively.
         if (type == input_params::seeking_expensive) return 1;
         return 0;
     }
 
-    void retag(const file_info&, abort_callback&) { throw exception_tagging_unsupported(); }
-    void remove_tags(abort_callback&) { throw exception_tagging_unsupported(); }
+    void retag(const file_info& info, abort_callback& abort) {
+        if (!m_forward_writer.is_valid()) throw exception_tagging_unsupported();
+        // A single-track input has no commit() of its own -- the SDK wrapper
+        // implements it as a no-op -- so the writer's commit has to happen here or
+        // nothing reaches the file.
+        m_forward_writer->set_info(0, info, abort);
+        m_forward_writer->commit(abort);
+        joc_log::line("decoder: %u tag field(s) written through %s",
+                      static_cast<unsigned>(info.meta_get_count()), m_forward_name.c_str());
+    }
+
+    void remove_tags(abort_callback& abort) {
+        if (!m_forward_writer.is_valid()) throw exception_tagging_unsupported();
+        input_info_writer_v2::ptr v2;
+        if (m_forward_writer->service_query_t(v2)) {
+            v2->remove_tags(abort);
+            return;
+        }
+        m_forward_writer->remove_tags_fallback(abort);
+    }
 
     static bool g_is_our_path(const char* path, const char* extension) {
         (void)path;
@@ -334,6 +581,19 @@ private:
     unsigned m_channels = 2;
     std::uint64_t m_frames_delivered = 0;
     bool m_reported = false;
+    // Chunks whose delivered samples did not match what the renderer produced.
+    std::uint64_t m_delivery_mismatches = 0;
+    // Duration get_info() last reported; a seek needs it to tell "past the end"
+    // from "inside the file" without decoding anything.
+    double m_length = 0.0;
+    // Bytes in front of a bare stream, which is where an ID3v2 tag sits.
+    std::uint64_t m_stream_start = 0;
+    // The other component that answers for this file's tags, and the one that
+    // writes them.  Only the writer exists on an instance opened to retag.
+    service_ptr_t<input_info_reader> m_forward_reader;
+    service_ptr_t<input_info_writer> m_forward_writer;
+    pfc::string8 m_forward_name;
+    bool m_write_only = false;
 };
 
 static input_singletrack_factory_t<input_joc> g_input_joc_factory;

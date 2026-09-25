@@ -4,15 +4,16 @@
 #   pwsh -File tools/deploy.ps1 -TestBed D:\fb2k -Platform x64
 #
 # Where the component has to go depends on the foobar2000 layout, and getting it
-# wrong is silent: foobar2000 simply never calls LoadLibrary on the file.  Two
-# layouts are in the wild:
+# wrong is silent: foobar2000 simply never calls LoadLibrary on the file.
 #
-#   profile-relative  <app>\profile\user-components\<name>\<name>.dll
-#                     foobar2000 1.6.19 portable and 2.x
-#   app-relative      <app>\user-components\<name>\<name>.dll
-#                     older / repacked 1.6 installs whose profile is <app>\configuration
+#   1.6         <app>\profile\user-components\<name>\<name>.dll
+#               (portable mode; without it the profile is in %APPDATA%)
+#   2.0 and up  <app>\user-components\<name>\<name>.dll
+#               even in portable mode, whose profile is <app>\profile
+#   older 1.6   <app>\user-components\<name>\<name>.dll
+#               repacked installs whose profile is <app>\configuration
 #
-# The per-component subdirectory is required in both: a DLL lying directly in
+# The per-component subdirectory is required in every case: a DLL lying directly in
 # user-components\ is not scanned.  Installing a .fb2k-component package through
 # foobar2000 itself ends up doing the same thing.
 [CmdletBinding()]
@@ -31,11 +32,16 @@ if (-not (Test-Path -LiteralPath (Join-Path $TestBed 'foobar2000.exe'))) {
     throw "no foobar2000.exe in $TestBed"
 }
 
+# The core version decides the layout, and its own profile records it.
+$versionFile = Join-Path $TestBed 'profile\version.txt'
+$version = if (Test-Path -LiteralPath $versionFile) { (Get-Content -LiteralPath $versionFile -Raw).Trim() } else { '' }
+
 if (-not $Target) {
     $appRelative = Test-Path -LiteralPath (Join-Path $TestBed 'configuration')
+    if ($version -match 'v(\d+)\.') { $appRelative = ([int]$Matches[1] -ge 2) }
     $root = if ($appRelative) { $TestBed } else { Join-Path $TestBed 'profile' }
     $Target = Join-Path $root 'user-components'
-    Write-Host ("layout: {0} ({1})" -f $(if ($appRelative) { 'app-relative' } else { 'profile-relative' }), $root)
+    Write-Host ("layout: {0} ({1}){2}" -f $(if ($appRelative) { 'app-relative' } else { 'profile-relative' }), $root, $(if ($version) { ", $version" } else { '' }))
 }
 
 # Portable profile: config stays inside the test bed instead of %APPDATA%.
