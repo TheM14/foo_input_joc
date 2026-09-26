@@ -189,6 +189,7 @@ private:
                     }
                     if (pick_file(m_hwnd, path, title, filter)) {
                         set_text(GetDlgItem(m_hwnd, IDC_EDIT_HRTF), path);
+                        update_status();
                         notify();
                     }
                     return TRUE;
@@ -219,6 +220,10 @@ private:
                     return TRUE;
                 }
                 if (code == EN_CHANGE || code == CBN_SELCHANGE) {
+                    if (id == IDC_EDIT_HRTF || id == IDC_COMBO_LAYOUT ||
+                        id == IDC_EDIT_GAIN) {
+                        update_status();
+                    }
                     notify();
                     return TRUE;
                 }
@@ -338,35 +343,36 @@ private:
     void update_enabled_state() { update_status(); }
 
     void update_status() {
-        const joc_settings::Values values = joc_settings::read();
-        std::string status;
+        const joc_settings::Values values = read_controls();
+        std::string output_status;
         if (values.output != 0) {
             char text[96] = {};
             const unsigned channels = joc_decode::speaker_channels(values.speaker_layout);
             std::snprintf(text, sizeof(text), "扬声器布局 %s（%u 声道）",
                           values.speaker_layout.c_str(), channels);
-            status = text;
-        } else {
-            // Show what will actually be read, so an empty box is not a mystery.
-            joc_decode::Settings effective = joc_settings::current();
-            effective.hrtf_source =
-                static_cast<joc_decode::HrtfSource>(values.hrtf_source);
-            effective.hrtf_file = values.hrtf_file;
-            const std::string file = joc_decode::resolve_hrtf_file(effective);
-            status = std::string(joc_settings::hrtf_source_name(values.hrtf_source)) + "：" +
-                     (file.empty() ? std::string("无法确定默认路径")
-                                   : (values.hrtf_file.empty() ? "默认 " + file : file));
+            output_status = text;
         }
-        // Say what is actually in effect, including the parts that do not apply
-        // to the selected output mode, so nothing has to be greyed out.
+        set_text(GetDlgItem(m_hwnd, IDC_LABEL_OUTPUT_STATUS), output_status);
+
+        joc_decode::Settings effective = joc_settings::current();
+        effective.hrtf_source =
+            static_cast<joc_decode::HrtfSource>(values.hrtf_source);
+        effective.hrtf_file = values.hrtf_file;
+        const std::string file = joc_decode::resolve_hrtf_file(effective);
+        std::string hrtf_status =
+            std::string(joc_settings::hrtf_source_name(values.hrtf_source)) + "：";
+        if (values.hrtf_file.empty()) hrtf_status += "默认";
+        hrtf_status += "\n" +
+                       (file.empty() ? std::string("无法确定默认路径") : file);
+        set_text(GetDlgItem(m_hwnd, IDC_LABEL_STATUS), hrtf_status);
+
         char gain[96] = {};
         if (values.gain_enabled) {
-            std::snprintf(gain, sizeof(gain), "\n增益开 %.2f dB", values.gain_db);
+            std::snprintf(gain, sizeof(gain), "增益开 %.2f dB", values.gain_db);
         } else {
-            std::snprintf(gain, sizeof(gain), "\n增益关（输出不衰减）");
+            std::snprintf(gain, sizeof(gain), "增益关（输出不衰减）");
         }
-        status += gain;
-        set_text(GetDlgItem(m_hwnd, IDC_LABEL_STATUS), status);
+        set_text(GetDlgItem(m_hwnd, IDC_LABEL_GAIN_STATUS), gain);
     }
 
     bool changed() const {
