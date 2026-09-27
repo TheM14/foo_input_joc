@@ -30,6 +30,32 @@ constexpr std::size_t kBedReadBytes = 48u * 1024u;
 constexpr std::size_t kBedPipeBytes = 1u << 20;
 constexpr std::size_t kFrameSamples = JOC_FRAME_SAMPLES;
 
+// The decoded bed has to stay on the E-AC-3 frame grid that the JOC matrix and the
+// OAMD are indexed by.  An mp4/mov edit list trims the decoded audio instead, which
+// takes the bed off that grid by however much the list removes -- a Dolby Atmos
+// download loses 2432 samples (1.58 frames) -- and every frame's matrix would then be
+// applied to audio tens of milliseconds away from it, so a subset of the objects comes
+// out attenuated.  The demuxer's own option drops the trim; the option exists only on
+// the mov/mp4 demuxer, so it is passed for that family alone.
+bool has_mov_timeline(const std::string& path) {
+    static const char* const kExtensions[] = {".mp4", ".m4a", ".m4b", ".m4v",
+                                              ".mov", ".3gp", ".3g2", ".mj2"};
+    std::string lowered = path;
+    for (char& character : lowered) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    for (const char* extension : kExtensions) {
+        const std::size_t length = std::strlen(extension);
+        if (lowered.size() >= length &&
+            lowered.compare(lowered.size() - length, length, extension) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Kernel entry points.
 //
@@ -685,6 +711,7 @@ bool Engine::Impl::start_bed(std::uint64_t source_sample, std::string* error) {
     // at the start of the file, which is a low-level, noise-like difference from a
     // play-through rather than a misalignment: the position stays exact.
     std::wstring input_arguments = L"-drc_scale 0 -target_level 0";
+    if (has_mov_timeline(input_path)) input_arguments += L" -ignore_editlist 1";
     const std::wstring offset = seek_time(source_sample);
     if (!offset.empty()) input_arguments += L" -ss " + offset;
     std::wstring bed_arguments = L"-map 0:a:";
