@@ -200,15 +200,24 @@ Result scan_mp4(const Window& file, std::size_t max_bytes) {
     Result result;
     result.kind = Kind::kMp4;
 
-    // moov is usually at the start for streamed files and at the end otherwise.
+    // moov is usually at the start for streamed files and at the end otherwise.  The
+    // walk reads box headers where they lie and steps over mdat in one go, so the
+    // whole file is walked from the top: a fixed prefix window cannot reach a moov
+    // that is larger than the window, which is what an MP4 with its cover art stored
+    // as a video track produces (a 4.9 MB moov against a 4 MiB window).  The tail
+    // range stays as a fallback for a file whose leading boxes do not parse.
     struct Range {
         std::uint64_t begin;
         std::uint64_t end;
     };
-    std::vector<Range> ranges{{0, (std::min<std::uint64_t>)(file.size(), max_bytes)}};
+    std::vector<Range> ranges{{0, file.size()}};
     if (file.size() > max_bytes) {
         ranges.push_back({file.size() - max_bytes, file.size()});
     }
+    // An oversized moov is a file this probe cannot describe, and walking it would be
+    // unbounded work; it is reported instead of entered.
+    constexpr std::uint64_t kMaxMoovBytes = 64ull * 1024ull * 1024ull;
+    bool oversized_moov = false;
 
     unsigned audio_seen = 0;
     bool found_any_audio = false;
@@ -218,6 +227,10 @@ Result scan_mp4(const Window& file, std::size_t max_bytes) {
                    [&](const std::string& type, std::uint64_t payload, std::uint64_t box_end,
                        std::size_t) {
                        if (type != "moov") return true;
+                       if (box_end - payload > kMaxMoovBytes) {
+                           oversized_moov = true;
+                           return true;
+                       }
                        walk_boxes(file, payload, box_end, 1,
                                   [&](const std::string& inner, std::uint64_t inner_payload,
                                       std::uint64_t inner_end, std::size_t) {
@@ -273,6 +286,8 @@ Result scan_mp4(const Window& file, std::size_t max_bytes) {
         result.detail = "mp4: first audio track is " +
                         (first_audio_format.empty() ? std::string("unknown")
                                                     : first_audio_format);
+    } else if (oversized_moov) {
+        result.detail = "mp4: moov is larger than the scan limit";
     } else {
         result.detail = "mp4: no audio track found in the scanned window";
     }
