@@ -22,6 +22,16 @@ std::wstring utf8_to_wide(const std::string& text) {
     return out;
 }
 
+// A library scan probes every container in the library, and most of them are
+// declined; they also mostly share a directory, so the path would spend the log's
+// byte budget repeating the same prefix once per file.  The file name is what
+// identifies the line.  Files this component claims are logged with their full
+// path by the caller.
+std::string file_name_of(const std::string& path) {
+    const std::string::size_type slash = path.find_last_of("\\/");
+    return (slash == std::string::npos) ? path : path.substr(slash + 1);
+}
+
 // A bounded, read-only view of the file.  Every accessor returns false instead of
 // throwing, so a truncated or hostile file simply fails the probe.
 class Window {
@@ -534,7 +544,7 @@ Result scan(const std::string& path, std::size_t max_bytes) {
     } else {
         result = scan_mp4(file, max_bytes);
     }
-    joc_log::line("container: %s -> %s (eac3=%d audio#%u codec=%s)", path.c_str(),
+    joc_log::line("container: %s -> %s (eac3=%d audio#%u codec=%s)", file_name_of(path).c_str(),
                   result.detail.c_str(), result.eac3 ? 1 : 0, result.audio_index,
                   result.codec.empty() ? "-" : result.codec.c_str());
     return result;

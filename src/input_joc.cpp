@@ -17,6 +17,8 @@
 #include <SDK/input_impl.h>
 #include <SDK/tag_processor.h>
 
+#include <atomic>
+#include <cstdarg>
 #include <cstring>
 #include <string>
 
@@ -64,6 +66,31 @@ const char* binaural_mode_name(std::uint32_t mode) {
 std::string file_name_of(const std::string& path) {
     const std::string::size_type slash = path.find_last_of("\\/");
     return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// A library scan opens every container in the library through open(), and all but
+// a few of them are declined because their audio is not E-AC-3 JOC.  The per-file
+// lines are what makes a scan diagnosable -- "the file that should have been
+// claimed was not, and here is why" -- but a large library is hundreds of
+// thousands of them, so a running summary is logged as well.  It is short enough
+// to survive the log rolling over, which is what a scan of that size makes it do.
+constexpr unsigned kDeclineSummaryEvery = 1000;
+std::atomic<unsigned> g_declined{0};
+std::atomic<unsigned> g_claimed{0};
+
+// One place for "this file is not ours".  The message stays the caller's, so a
+// decline that failed rather than decided still reads as one.
+void decline(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    joc_log::line_v(fmt, args);
+    va_end(args);
+
+    const unsigned count = g_declined.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count % kDeclineSummaryEvery) == 0u) {
+        joc_log::line("scan: %u file(s) declined, %u claimed so far", count,
+                      g_claimed.load(std::memory_order_relaxed));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -200,8 +227,7 @@ public:
         try {
             m_native_path = filesystem::g_get_native_path(m_path.c_str());
         } catch (const pfc::exception& error) {
-            joc_log::line("decoder: not a native file path (%s): %s", m_path.c_str(),
-                          error.what());
+            decline("decoder: not a native file path (%s): %s", m_path.c_str(), error.what());
             throw exception_io_unsupported_format();
         }
 
@@ -249,10 +275,11 @@ public:
 
         if (scan.joc != joc_eac3::JocState::kYes) {
             // Hand the file to the next entry in the priority table.
-            joc_log::line("decoder: yielding to the built-in decoder (%s)", scan.detail);
+            decline("decoder: yielding to the built-in decoder (%s)", scan.detail);
             throw exception_io_unsupported_format();
         }
         joc_log::line("decoder: claiming this file as E-AC-3 JOC (bare stream)");
+        g_claimed.fetch_add(1, std::memory_order_relaxed);
         m_input_kind = joc_decode::InputKind::kBare;
     }
 
@@ -263,8 +290,8 @@ public:
     void open_container(const char* extension) {
         m_container = joc_container::scan(m_native_path.get_ptr());
         if (!m_container.eac3) {
-            joc_log::line("decoder: yielding to the built-in decoder (%s)",
-                          m_container.detail.c_str());
+            decline("decoder: yielding to the built-in decoder (%s)",
+                    m_container.detail.c_str());
             throw exception_io_unsupported_format();
         }
 
@@ -273,20 +300,20 @@ public:
         std::string detail;
         if (!joc_decode::probe_container_joc(settings.ffmpeg_path, m_native_path.get_ptr(),
                                             m_container.audio_index, &joc, &detail)) {
-            joc_log::line("decoder: cannot examine the E-AC-3 track (%s); yielding",
-                          detail.c_str());
+            decline("decoder: cannot examine the E-AC-3 track (%s); yielding", detail.c_str());
             throw exception_io_unsupported_format();
         }
         if (!joc) {
-            joc_log::line("decoder: yielding to the built-in decoder (E-AC-3 track %u carries "
-                          "no JOC: %s)",
-                          m_container.audio_index, detail.c_str());
+            decline("decoder: yielding to the built-in decoder (E-AC-3 track %u carries "
+                    "no JOC: %s)",
+                    m_container.audio_index, detail.c_str());
             throw exception_io_unsupported_format();
         }
 
         joc_log::line("decoder: claiming this file as E-AC-3 JOC (%s, audio track %u, .%s)",
                       joc_container::kind_name(m_container.kind), m_container.audio_index,
                       extension);
+        g_claimed.fetch_add(1, std::memory_order_relaxed);
         m_input_kind = joc_decode::InputKind::kContainer;
         m_audio_index = m_container.audio_index;
     }

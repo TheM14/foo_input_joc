@@ -27,8 +27,9 @@
 *.personalized_headphone
 rosella_kernels.npz
 
-# The component writes its own log next to the DLL
+# The component writes its own log next to the DLL, and rolls it to a .1 sibling
 joc_decoder.log
+joc_decoder.log.1
 
 # Measurement record: local working notes, kept on disk and never published.
 VERIFICATION.md

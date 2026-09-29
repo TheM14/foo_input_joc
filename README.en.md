@@ -94,7 +94,11 @@ and test-bed scripts. Settings also read `JOC_*` environment overrides for one r
 only); the list and what each one does is in `src\settings.cpp`.
 
 To diagnose a problem, read `joc_decoder.log` beside the DLL: the component writes its own
-version, the core version and the log path there at start-up.
+version, the core version and the log path there at start-up. The log is capped by **bytes**: a
+file that reaches 16 MiB is rolled to `joc_decoder.log.1` beside it, replacing the previous roll
+rather than accumulating, so the two together never exceed 32 MiB and the newest lines are always
+in `joc_decoder.log`. The version banner is written again after a roll. A Media Library scan logs
+every container in the library, which is where the volume comes from.
 
 ## Known limitations
 

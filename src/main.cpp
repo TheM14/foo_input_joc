@@ -30,6 +30,9 @@ class joc_initquit : public initquit {
 public:
     void on_init() override {
         joc_log::open();
+        // Recorded, so that a log which has rolled still opens with the versions
+        // it was produced by.
+        joc_log::header_begin();
         joc_log::line("=== foo_input_joc %s ===", JOC_VERSION);
         joc_log::line("foobar2000 core : %s", core_version_info::g_get_version_string());
         joc_log::line("component file  : %s", core_api::get_my_file_name());
@@ -37,6 +40,8 @@ public:
         joc_log::line("portable mode   : %s",
                       core_api::is_portable_mode_enabled() ? "yes" : "no");
         joc_log::line("log file        : %s", joc_log::path());
+        joc_log::line("log limit       : %llu byte(s) per file, then rolled to the .1 suffix",
+                      joc_log::budget_bytes());
         joc_log::line("compiled as     : %s",
 #if defined(_M_IX86)
                       "x86 (32-bit)"
@@ -46,6 +51,7 @@ public:
                       "other"
 #endif
         );
+        joc_log::header_end();
     }
 
     void on_quit() override { joc_log::line("=== foo_input_joc shutdown ==="); }
