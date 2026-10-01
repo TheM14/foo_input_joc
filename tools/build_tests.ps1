@@ -41,6 +41,7 @@ $lines = @(
     # log.cpp comes along because the engine writes its diagnostics through it.
     "cl $common /Fe:`"$outDir\container_scan_test.exe`" /Fo:`"$outDir\\`" tests\container_scan_test.cpp src\container_scan.cpp src\log.cpp",
     "cl $common /Fe:`"$outDir\log_rotation_test.exe`" /Fo:`"$outDir\\`" tests\log_rotation_test.cpp src\log.cpp",
+    "cl $common /Fe:`"$outDir\long_path_test.exe`" /Fo:`"$outDir\\`" tests\long_path_test.cpp src\container_scan.cpp src\joc_decode.cpp src\eac3_scan.cpp src\log.cpp `"$coreLib`" shell32.lib",
     "cl $common /Fe:`"$outDir\scan_selftest.exe`" /Fo:`"$outDir\\`" tests\scan_selftest.cpp src\eac3_scan.cpp",
     "cl $common /Fe:`"$outDir\prefs_layout_check.exe`" /Fo:`"$outDir\\`" tests\prefs_layout_check.cpp user32.lib gdi32.lib",
     "cl $common /Fe:`"$outDir\scan_crosscheck.exe`" /Fo:`"$outDir\\`" tests\scan_crosscheck.cpp src\eac3_scan.cpp `"$coreLib`" shell32.lib",

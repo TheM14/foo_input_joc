@@ -114,6 +114,7 @@
     <ClInclude Include="src\prefs.h" />
     <ClInclude Include="src\resource.h" />
     <ClInclude Include="src\settings.h" />
+    <ClInclude Include="src\win_path.h" />
   </ItemGroup>
 
   <ItemGroup>

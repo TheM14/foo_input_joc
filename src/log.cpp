@@ -8,6 +8,8 @@
 #include <mutex>
 #include <string>
 
+#include "win_path.h"
+
 namespace joc_log {
 namespace {
 
@@ -47,33 +49,26 @@ std::wstring module_directory() {
     return dir;
 }
 
-std::string to_utf8(const std::wstring& text) {
-    if (text.empty()) return {};
-    const int needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
-                                           static_cast<int>(text.size()), nullptr, 0,
-                                           nullptr, nullptr);
-    std::string out(static_cast<std::string::size_type>(needed), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
-                        out.data(), needed, nullptr, nullptr);
-    return out;
-}
-
 void open_locked() {
     g_opened = true;
 
     wchar_t from_env[4096] = {};
     const DWORD env_length = GetEnvironmentVariableW(L"JOC_LOG", from_env,
                                                      static_cast<DWORD>(4096));
+    std::wstring plain;
     if (env_length > 0 && env_length < 4096) {
-        g_wide_path.assign(from_env, env_length);
+        plain.assign(from_env, env_length);
     } else {
         const std::wstring dir = module_directory();
         if (dir.empty()) return;
-        g_wide_path = dir + L"\\joc_decoder.log";
+        plain = dir + L"\\joc_decoder.log";
     }
 
+    // g_path is the one the component reports and a user reads; the handles work on
+    // the extended form, because a portable install can sit deeper than MAX_PATH.
+    g_path = joc_path::to_utf8(plain);
+    g_wide_path = joc_path::to_wide_extended(plain);
     g_wide_rolled = g_wide_path + L".1";
-    g_path = to_utf8(g_wide_path);
     g_file = _wfopen(g_wide_path.c_str(), L"wb");
     if (g_file == nullptr) {
         g_path.clear();

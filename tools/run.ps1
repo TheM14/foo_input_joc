@@ -39,7 +39,10 @@ if (Test-Path -LiteralPath $running) {
 }
 
 $arguments = @()
-if ($Play) { $arguments += $Play }
+# Start-Process joins the array with spaces and quotes nothing itself, so a path with
+# a space in it would reach foobar2000 as several arguments and nothing would play --
+# silently, which is the worst way for a test bed to fail.
+if ($Play) { $arguments += ($Play | ForEach-Object { '"' + $_ + '"' }) }
 $process = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru
 Write-Host "started pid=$($process.Id) $($Play -join ', ')"
 Start-Sleep -Seconds $WaitSeconds

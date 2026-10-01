@@ -8,19 +8,10 @@
 #include <vector>
 
 #include "log.h"
+#include "win_path.h"
 
 namespace joc_container {
 namespace {
-
-std::wstring utf8_to_wide(const std::string& text) {
-    if (text.empty()) return {};
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, text.c_str(),
-                                           static_cast<int>(text.size()), nullptr, 0);
-    std::wstring out(static_cast<std::size_t>(needed), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(),
-                        needed);
-    return out;
-}
 
 // A library scan probes every container in the library, and most of them are
 // declined; they also mostly share a directory, so the path would spend the log's
@@ -37,7 +28,7 @@ std::string file_name_of(const std::string& path) {
 class Window {
 public:
     bool open(const std::string& path) {
-        const std::wstring wide = utf8_to_wide(path);
+        const std::wstring wide = joc_path::to_wide_extended(path);
         handle_ = CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle_ == INVALID_HANDLE_VALUE) {

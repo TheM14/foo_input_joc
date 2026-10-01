@@ -14,6 +14,7 @@
 
 #include "eac3_scan.h"
 #include "log.h"
+#include "win_path.h"
 
 namespace joc_decode {
 namespace {
@@ -78,18 +79,8 @@ struct CoreApi {
     const char*(JOC_CALL* error_name)(joc_error) = joc_error_name;
 };
 
-std::wstring utf8_to_wide(const std::string& text) {
-    if (text.empty()) return {};
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, text.c_str(),
-                                           static_cast<int>(text.size()), nullptr, 0);
-    std::wstring out(static_cast<std::size_t>(needed), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(),
-                        needed);
-    return out;
-}
-
 bool file_exists(const std::string& path) {
-    const std::wstring wide = utf8_to_wide(path);
+    const std::wstring wide = joc_path::to_wide_extended(path);
     if (wide.empty()) return false;
     const DWORD attributes = GetFileAttributesW(wide.c_str());
     return attributes != INVALID_FILE_ATTRIBUTES &&
@@ -147,11 +138,11 @@ public:
                                         FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
                                         CREATE_ALWAYS, 0, nullptr);
 
-        std::wstring command = L"\"" + utf8_to_wide(ffmpeg_path) + L"\"";
+        std::wstring command = L"\"" + joc_path::to_wide_extended(ffmpeg_path) + L"\"";
         command += L" -hide_banner -loglevel error -nostdin -y ";
         command += input_arguments;  // input options must precede -i
         command += L" -i \"";
-        command += utf8_to_wide(input_path);
+        command += joc_path::to_wide_extended(input_path);
         command += L"\" ";
         command += output_arguments;
 
@@ -223,7 +214,7 @@ class InputFile {
 public:
     ~InputFile() { close(); }
     bool open(const std::string& path) {
-        handle_ = CreateFileW(utf8_to_wide(path).c_str(), GENERIC_READ,
+        handle_ = CreateFileW(joc_path::to_wide_extended(path).c_str(), GENERIC_READ,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
         return handle_ != INVALID_HANDLE_VALUE;
@@ -448,8 +439,8 @@ bool probe_container_joc(const std::string& ffmpeg_path, const std::string& path
     std::uint64_t modified = 0;
     {
         WIN32_FILE_ATTRIBUTE_DATA data{};
-        if (GetFileAttributesExW(utf8_to_wide(path).c_str(), GetFileExInfoStandard, &data) !=
-            FALSE) {
+        if (GetFileAttributesExW(joc_path::to_wide_extended(path).c_str(), GetFileExInfoStandard,
+                                 &data) != FALSE) {
             size = (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
             modified = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
                        data.ftLastWriteTime.dwLowDateTime;
