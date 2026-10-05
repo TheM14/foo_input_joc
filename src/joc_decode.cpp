@@ -20,6 +20,16 @@ namespace joc_decode {
 namespace {
 
 constexpr std::size_t kEac3Chunk = 96u * 1024u;      // bytes read per push
+// The core renders every frame it is handed, and it renders it during the push,
+// so a read must not queue more frames than the caller is about to take: a 96 KB
+// read is around thirty syncframes, i.e. a second of audio rendered to satisfy
+// one 4096-frame read.  This is that read (2.67 syncframes) rounded up, so each
+// read hands the core about as much as it is about to consume.
+constexpr std::uint64_t kEac3FramesPerRead = 3u;
+// Rendered audio the caller has not taken yet.  Once this much is waiting there
+// is nothing to gain from queueing more input: the core would render it now and
+// the caller would not ask for it for several more reads.
+constexpr std::size_t kMaxRenderedAheadSamples = 4096u;
 constexpr std::size_t kBedFramesChunk = 8192u;       // staging capacity, in frames
 constexpr std::size_t kBedChannels = 6;              // ffmpeg -ac 6
 // A read on an anonymous pipe only completes once the whole request is available,
@@ -974,7 +984,23 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
             impl.eac3_eof = true;
         }
 
-        if (!impl.eac3_eof && impl.frames_queued <= impl.bed_frames_pushed + 2u &&
+        // The core renders during the push, so input is queued only while the
+        // caller still has less than one read's worth of rendered audio waiting.
+        // Pushing past that is what turns a single read into a second of work:
+        // the samples are rendered early rather than wrongly, and the read that
+        // pays for them overruns its own audio.
+        std::size_t rendered_ahead = 0;
+        {
+            joc_stream_status_info pending{};
+            pending.struct_size = sizeof(pending);
+            pending.struct_version = 1;
+            if (impl.api.status(impl.stream, &pending) == JOC_OK) {
+                rendered_ahead = static_cast<std::size_t>(pending.buffered_samples);
+            }
+        }
+
+        if (!impl.eac3_eof && rendered_ahead < kMaxRenderedAheadSamples &&
+            impl.frames_queued <= impl.bed_frames_pushed + 2u &&
             (impl.settings.input_frame_limit == 0 ||
              impl.frames_queued < impl.settings.input_frame_limit)) {
             // The tail of a chunk is usually the head of the next syncframe.  It
@@ -1023,26 +1049,32 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                     offset += bytes;
                     ++complete;
                 }
-                // With an input limit the chunk is cut at a frame boundary: the
+                // The chunk is cut at a frame boundary for two independent
+                // reasons: a configured input limit has to stop exactly where it
+                // says, and a read must not queue more frames than it is about to
+                // consume.  Both cuts land on a frame boundary because the
                 // renderer's output depends on how many frames it was given, so a
-                // limit that overshoots to the end of the read buffer would not
-                // reproduce a run that stopped earlier.
-                std::size_t push_bytes = offset;
-                std::uint64_t pushed_frames = complete;
+                // cut that overshoots would not reproduce a run that stopped
+                // earlier.
+                std::uint64_t allowed = complete;
                 if (impl.settings.input_frame_limit != 0) {
                     const std::uint64_t room =
                         impl.settings.input_frame_limit - impl.frames_queued;
-                    if (complete > room) {
-                        pushed_frames = room;
-                        std::size_t walk = 0;
-                        for (std::uint64_t index = 0; index < pushed_frames; ++index) {
-                            const std::size_t bytes = joc_eac3::frame_bytes_at(
-                                impl.eac3_buffer.data(), total, walk);
-                            if (bytes == 0 || walk + bytes > total) break;
-                            walk += bytes;
-                        }
-                        push_bytes = walk;
+                    if (allowed > room) allowed = room;
+                }
+                if (allowed > kEac3FramesPerRead) allowed = kEac3FramesPerRead;
+                std::size_t push_bytes = offset;
+                std::uint64_t pushed_frames = complete;
+                if (allowed < complete) {
+                    pushed_frames = allowed;
+                    std::size_t walk = 0;
+                    for (std::uint64_t index = 0; index < pushed_frames; ++index) {
+                        const std::size_t bytes = joc_eac3::frame_bytes_at(
+                            impl.eac3_buffer.data(), total, walk);
+                        if (bytes == 0 || walk + bytes > total) break;
+                        walk += bytes;
                     }
+                    push_bytes = walk;
                 }
                 joc_stream_buffer input{};
                 input.struct_size = sizeof(input);
@@ -1064,7 +1096,11 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                     std::memmove(impl.eac3_buffer.data(), impl.eac3_buffer.data() + push_bytes,
                                  impl.eac3_carry);
                 }
-                if (got == 0) impl.eac3_eof = true;
+                // The pipe can end while complete syncframes are still waiting in
+                // the buffer: they are queued by the next pass, so the input is
+                // only over once nothing but a partial frame is left.  Ending here
+                // instead would drop them, and with them the end of the file.
+                if (got == 0 && pushed_frames >= complete) impl.eac3_eof = true;
             }
         }
 

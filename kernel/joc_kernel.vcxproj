@@ -113,18 +113,19 @@
   </ItemDefinitionGroup>
 
   <!--
-    SIMD units, mirroring CMakeLists.txt (the JOC_SIMD_* block) exactly.
+    SIMD units, mirroring CMakeLists.txt (the JOC_SIMD_* block).
 
     The ISA in the file name, one translation unit per ISA, each compiled with
     its own /arch because MSVC has no function-level ISA attribute; dispatch.cpp
-    (a baseline unit) picks one at run time from CPUID/XGETBV.  The kernel
-    enables SIMD only for x86_64 and aarch64, so:
+    (a baseline unit) picks one at run time from CPUID/XGETBV.
 
-      * Win32 (x86) gets NO SIMD unit and NO SIMD define: the scalar reference
-        and the probe/dispatch baseline are all it builds, exactly as
-        CMAKE_SIZEOF_VOID_P EQUAL 8 gates them out upstream;
       * x64 gets the AVX2 and AVX-512 units, JOC_SIMD_HAVE_SSE2 / _AVX2 /
         _AVX512, and a per-file /arch for those two files only;
+      * Win32 (x86) gets the AVX2 unit and JOC_SIMD_HAVE_AVX2.  AVX2 is not an
+        x86-64-only ISA and MSVC accepts /arch:AVX2 for x86, so gating it on the
+        pointer size left the 32-bit component on the scalar reference, which is
+        too slow to hold a 4096-frame read inside its own 85.3 ms of audio.
+        AVX-512 stays x64-only: 32-bit mode addresses ZMM0-7 only.
       * src\simd\kernels_intrin_neon.cpp is excluded everywhere here: the CMake
         build lists it only for aarch64 (CMakeLists.txt lines 177-180), which no
         configuration of this project targets.
@@ -132,6 +133,11 @@
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
     <ClCompile>
       <PreprocessorDefinitions>JOC_SIMD_HAVE_SSE2=1;JOC_SIMD_HAVE_AVX2=1;JOC_SIMD_HAVE_AVX512=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)'=='Win32'">
+    <ClCompile>
+      <PreprocessorDefinitions>JOC_SIMD_HAVE_AVX2=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
 
@@ -200,6 +206,12 @@
     </ClCompile>
     <ClCompile Include="src\simd\kernels_intrin_avx512.cpp">
       <AdditionalOptions>/arch:AVX512 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Platform)'=='Win32'">
+    <ClCompile Include="src\simd\kernels_intrin_avx2.cpp">
+      <AdditionalOptions>/arch:AVX2 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
   </ItemGroup>
 
