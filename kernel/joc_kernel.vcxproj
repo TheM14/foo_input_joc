@@ -121,11 +121,9 @@
 
       * x64 gets the AVX2 and AVX-512 units, JOC_SIMD_HAVE_SSE2 / _AVX2 /
         _AVX512, and a per-file /arch for those two files only;
-      * Win32 (x86) gets the AVX2 unit and JOC_SIMD_HAVE_AVX2.  AVX2 is not an
-        x86-64-only ISA and MSVC accepts /arch:AVX2 for x86, so gating it on the
-        pointer size left the 32-bit component on the scalar reference, which is
-        too slow to hold a 4096-frame read inside its own 85.3 ms of audio.
-        AVX-512 stays x64-only: 32-bit mode addresses ZMM0-7 only.
+      * Win32 (x86) gets the AVX2 unit and JOC_SIMD_HAVE_AVX2: AVX2 is not an
+        x86-64-only ISA.  AVX-512 stays x64-only, because 32-bit mode addresses
+        ZMM0-7 only.
       * src\simd\kernels_intrin_neon.cpp is excluded everywhere here: the CMake
         build lists it only for aarch64 (CMakeLists.txt lines 177-180), which no
         configuration of this project targets.
