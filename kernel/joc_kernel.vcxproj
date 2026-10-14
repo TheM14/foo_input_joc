@@ -5,10 +5,12 @@
   shipping and loading joc_core.dll.
 
   The sources under kernel\src and kernel\include are a verbatim copy of the
-  upstream library (see JustOneCacophonyCXX\CMakeLists.txt); the only edits are
-  the JOC_STATIC branch in kernel\include\joc_core.h / joc_stream.h and the
-  EJOC_STATIC branch in kernel\include\eac3joc_core.h, which turn JOC_API and
-  EJOC_API into empty macros for a static build.
+  upstream library (see JustOneCacophonyCXX\CMakeLists.txt): nothing under either
+  tree is edited here, and both are kept identical to it, so a single core serves
+  the upstream tools and this component alike.  The static build needs no branch
+  of its own: JOC_STATIC (kernel\include\joc_core.h / joc_stream.h) and
+  EJOC_STATIC (kernel\include\eac3joc_core.h) are already part of the shared
+  headers, turning JOC_API and EJOC_API into empty macros.
 
   Conventions deliberately mirror the component project (foo_input_joc.vcxproj)
   and the kernel's own CMake build:
