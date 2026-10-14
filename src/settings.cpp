@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +28,7 @@ constexpr GUID kGuidBinauralMode = {0x1a57c9e4, 0x83b6, 0x42f1, {0x9c, 0x50, 0x2
 constexpr GUID kGuidGainEnabled = {0x74b1e5c8, 0x2a39, 0x4d16, {0x8f, 0x62, 0x0d, 0x51, 0xb7, 0x3c, 0x9a, 0x28}};
 constexpr GUID kGuidGain = {0x6c04d8b2, 0xe75f, 0x4a39, {0x8d, 0x26, 0x51, 0xb3, 0xc8, 0x40, 0x9e, 0x27}};
 constexpr GUID kGuidTail = {0x38f1b6a7, 0x0d24, 0x4e88, {0xb7, 0x95, 0x2c, 0x61, 0x4f, 0xd2, 0x08, 0xa3}};
+constexpr GUID kGuidForceInt24 = {0xd2c67f41, 0x8b53, 0x4a2e, {0x97, 0x61, 0x0f, 0xc8, 0x35, 0xba, 0x64, 0x12}};
 constexpr GUID kGuidObjectDelay = {0x5b2e9c18, 0xa640, 0x4d7b, {0x92, 0x0e, 0x37, 0xc5, 0x81, 0x6b, 0x2a, 0x54}};
 constexpr GUID kGuidThreads = {0xcb7a4015, 0x3f98, 0x4c62, {0xa0, 0x8d, 0x1b, 0x74, 0x29, 0xe6, 0x53, 0x0f}};
 constexpr GUID kGuidFfmpeg = {0x0e9d37c2, 0x5a18, 0x4b40, {0xb6, 0x3f, 0x88, 0x2d, 0x9a, 0x70, 0x1c, 0x65}};
@@ -42,9 +44,22 @@ cfg_bool g_gain_enabled(kGuidGainEnabled, true);
 cfg_int g_gain_mdb(kGuidGain, 0);
 // milli-seconds
 cfg_uint g_tail_ms(kGuidTail, 5000);
+// Deliver int24 instead of float32.
+cfg_bool g_force_int24(kGuidForceInt24, false);
 cfg_uint g_object_delay(kGuidObjectDelay, 1473);
 cfg_uint g_threads(kGuidThreads, 0);
 cfg_string g_ffmpeg(kGuidFfmpeg, "ffmpeg");
+
+// Appends an optional trailing field to one of the fixed describe() buffers, so a
+// setting that is off leaves the line exactly as it was.
+template <std::size_t N>
+void append_to(char (&buffer)[N], const char* text) {
+    if (text == nullptr || *text == '\0') return;
+    const std::size_t used = std::strlen(buffer);
+    const std::size_t extra = std::strlen(text);
+    if (used + extra + 1u > N) return;
+    std::memcpy(buffer + used, text, extra + 1u);
+}
 
 std::string environment(const char* name) {
     char buffer[4096] = {};
@@ -108,6 +123,7 @@ Values read() {
     values.gain_enabled = static_cast<bool>(g_gain_enabled);
     values.gain_db = static_cast<double>(static_cast<long long>(g_gain_mdb)) / 1000.0;
     values.tail_seconds = static_cast<double>(static_cast<unsigned>(g_tail_ms)) / 1000.0;
+    values.force_int24 = static_cast<bool>(g_force_int24);
     values.object_delay_samples = static_cast<unsigned>(g_object_delay);
     values.native_threads = static_cast<unsigned>(g_threads);
     values.ffmpeg_path = g_ffmpeg.get_ptr();
@@ -124,6 +140,7 @@ void write(const Values& values) {
     g_gain_enabled = values.gain_enabled;
     g_gain_mdb = static_cast<long long>(values.gain_db * 1000.0 + (values.gain_db >= 0 ? 0.5 : -0.5));
     g_tail_ms = static_cast<unsigned>(values.tail_seconds * 1000.0 + 0.5);
+    g_force_int24 = values.force_int24;
     g_object_delay = values.object_delay_samples;
     g_threads = values.native_threads;
     g_ffmpeg = values.ffmpeg_path.c_str();
@@ -146,6 +163,7 @@ joc_decode::Settings current() {
     (void)env_double("JOC_GAIN_DB", &values.gain_db);
     if (env_string("JOC_GAIN_ENABLED", &text)) values.gain_enabled = (text != "0");
     (void)env_double("JOC_TAIL_SECONDS", &values.tail_seconds);
+    if (env_string("JOC_FORCE_INT24", &text)) values.force_int24 = (text != "0");
     (void)env_uint("JOC_OBJECT_DELAY", &values.object_delay_samples);
     (void)env_uint("JOC_THREADS", &values.native_threads);
 
@@ -161,6 +179,7 @@ joc_decode::Settings current() {
     // attenuation has to be visible and switchable.
     settings.gain_db = values.gain_enabled ? values.gain_db : 0.0;
     settings.tail_seconds = values.tail_seconds;
+    settings.force_int24 = values.force_int24;
     settings.object_delay_samples = values.object_delay_samples;
     settings.native_threads = values.native_threads;
     settings.ffmpeg_path = values.ffmpeg_path.empty() ? "ffmpeg" : values.ffmpeg_path;
@@ -187,6 +206,9 @@ std::string describe(const joc_decode::Settings& settings) {
                       settings.object_delay_samples, settings.native_threads,
                       settings.ffmpeg_path.c_str());
     }
+    // Stated only when it is not the default, so a default log line reads as it
+    // always did.
+    append_to(text, settings.force_int24 ? ", int24=forced" : "");
     return text;
 }
 
@@ -200,6 +222,7 @@ std::string describe(const Values& values) {
                   values.binaural_mode, values.gain_enabled ? "" : "(off) ", values.gain_db,
                   values.tail_seconds, values.object_delay_samples, values.native_threads,
                   values.ffmpeg_path.c_str());
+    append_to(text, values.force_int24 ? " int24=forced" : "");
     return text;
 }
 

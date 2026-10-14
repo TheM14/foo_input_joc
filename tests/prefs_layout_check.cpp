@@ -94,12 +94,23 @@ bool is_descendant(HWND candidate, HWND ancestor) {
 
 // A control the user can operate: static text and group boxes answer WM_NCHITTEST
 // with HTTRANSPARENT, so a real click passes straight through them.
+//
+// BS_GROUPBOX is 0x0007, whose bits are a subset of what BS_AUTOCHECKBOX (0x0003)
+// and BS_AUTORADIOBUTTON (0x0009) set, so testing the style against BS_GROUPBOX
+// alone classifies every checkbox and radio button as a group box -- and then
+// exempts exactly the controls this tool exists to check.  BS_TYPEMASK is what
+// tells the button styles apart.
+bool is_group_box_window(HWND window) {
+    if (class_of(window) != "Button") return false;
+    const LONG_PTR style = GetWindowLongPtrW(window, GWL_STYLE);
+    return (style & BS_TYPEMASK) == BS_GROUPBOX;
+}
+
 bool is_interactive(HWND window) {
     const std::string window_class = class_of(window);
     if (window_class == "Edit" || window_class == "ComboBox") return true;
     if (window_class != "Button") return false;
-    const LONG_PTR style = GetWindowLongPtrW(window, GWL_STYLE);
-    return (style & BS_GROUPBOX) == 0;
+    return !is_group_box_window(window);
 }
 
 // True when another interactive sibling sits above the control at that point --
@@ -209,11 +220,9 @@ int main(int argc, char** argv) {
 
         // Only controls the user is meant to operate count as problems: static
         // text and group boxes are transparent to the mouse by design.
-        const LONG_PTR control_style = GetWindowLongPtrW(control.window, GWL_STYLE);
-        const bool is_group_box =
-            control.window_class == "Button" && (control_style & BS_GROUPBOX) != 0;
-        const bool is_label = control.window_class == "Static" && !is_group_box;
-        const bool interactive = !is_group_box && !is_label;
+        const bool group_box = is_group_box_window(control.window);
+        const bool is_label = control.window_class == "Static";
+        const bool interactive = !group_box && !is_label;
         const bool bad = interactive && (!enabled || !inside || !hits_self);
         if (bad) ++problems;
 

@@ -214,7 +214,7 @@ private:
                     notify();
                     return TRUE;
                 }
-                if (id == IDC_CHECK_GAIN) {
+                if (id == IDC_CHECK_GAIN || id == IDC_CHECK_INT24) {
                     update_enabled_state();
                     notify();
                     return TRUE;
@@ -301,6 +301,8 @@ private:
 
         SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_GAIN), BM_SETCHECK,
                      values.gain_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_INT24), BM_SETCHECK,
+                     values.force_int24 ? BST_CHECKED : BST_UNCHECKED, 0);
         update_enabled_state();
     }
 
@@ -328,6 +330,8 @@ private:
         values.gain_db = std::atof(get_text(GetDlgItem(m_hwnd, IDC_EDIT_GAIN)).c_str());
         values.gain_enabled =
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_GAIN) == BST_CHECKED;
+        values.force_int24 =
+            IsDlgButtonChecked(m_hwnd, IDC_CHECK_INT24) == BST_CHECKED;
         // Advanced values are not on this page; keep whatever is stored.
         const joc_settings::Values stored = joc_settings::read();
         values.object_delay_samples = stored.object_delay_samples;
@@ -353,6 +357,18 @@ private:
             output_status = text;
         }
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_OUTPUT_STATUS), output_status);
+
+        // The hint says what the switch does and what the other state means: the
+        // renderer is float32 either way, so "24bit" is about the delivery, and
+        // that is not something a checkbox label can carry on its own.  The second
+        // half matters because this switch changes what the component *reports*
+        // about a file, and foobar2000 caches that per file: an item whose
+        // information was read before the switch was flipped keeps the old format
+        // until it is reloaded.
+        set_text(GetDlgItem(m_hwnd, IDC_LABEL_INT24_HINT),
+                 values.force_int24
+                     ? "开启：量化到 int24，超出 ±1 截断；切换后需刷新文件信息"
+                     : "关闭：按 32 位浮点交付（默认）");
 
         joc_decode::Settings effective = joc_settings::current();
         effective.hrtf_source =
@@ -383,6 +399,7 @@ private:
         if (now.hrtf_file != m_initial.hrtf_file) return true;
         if (now.binaural_mode != m_initial.binaural_mode) return true;
         if (now.gain_enabled != m_initial.gain_enabled) return true;
+        if (now.force_int24 != m_initial.force_int24) return true;
         if (now.gain_db != m_initial.gain_db) return true;
         if (now.tail_seconds != m_initial.tail_seconds) return true;
         if (now.ffmpeg_path != m_initial.ffmpeg_path) return true;

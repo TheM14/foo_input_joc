@@ -65,6 +65,15 @@ Preferences → Tools → **JOC decoder**:
   `binaural.personalized_headphone`;
 * **Gain** — a switch and a value in dB. Binaural rendering can exceed full scale on material
   that does not clip in the core mix, so attenuation belongs here;
+* **Force 24-bit output (int24)** — off by default, which delivers float32. When on, every sample
+  is quantised with the core's own int24 rule (clip to ±1, ×8388607, truncate) before it is handed
+  over, the samples that had to be clipped are counted in the log, and the component reports the
+  file as 24-bit fixed point. The renderer itself stays float32: this is the precision the decoder
+  delivers, not the output device's bit depth, which is set in Preferences → Output. **Reload a
+  file's information after flipping this switch** (Properties → *Reload info*, or remove the file
+  from the Media Library and add it again): foobar2000 caches technical information per file, and
+  until it is reloaded Properties and the Converter still go by the old 32-bit floating-point
+  answer, warning that the encoder does not take floating-point input.
 * the **ffmpeg** executable to use.
 
 No control on the page is disabled, and the status line states what is in effect.
@@ -111,6 +120,11 @@ every container in the library, which is where the volume comes from.
   behind it) can be **read but not written**: no component claims raw E-AC-3 for writing, and
   rewriting the whole file to insert a tag is not this component's job.
 * Transport streams (`.ts`, `.m2ts`) are not claimed.
+* **Force 24-bit output** only changes the precision the decoder delivers: foobar2000 converts the
+  int24 it receives into its own floating-point samples, and which bit depth the output device runs
+  at is still decided in Preferences → Output, not by this component. Samples outside ±1 follow the
+  core's `continue` clip policy (binaural rendering can exceed full scale, so use **Gain** when
+  attenuation is wanted).
 * Playback length is exactly the file's duration. The binaural renderer still computes its room
   tail, but it is not delivered as playback time the file does not have.
 * A seek re-enters the bitstream at the frame holding the target instead of decoding everything

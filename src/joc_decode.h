@@ -96,6 +96,15 @@ struct Settings {
     // is what the reference CLI's --duration does.  Zero means "the whole file".
     // Only the comparison harness sets it; playback leaves it at zero.
     std::uint64_t input_frame_limit = 0;
+    // Deliver 24-bit fixed-point PCM instead of float32.  The renderer itself is
+    // always float32 and this does not change it: the flag says how the *caller*
+    // hands the samples on, and the quantisation happens once, where the format is
+    // decided (see pack_int24 below).  It exists because the streaming interface
+    // has no int24 output -- the core's int24 rule lives in its file-writing path
+    // (kernel/src/io/wav_writer.cpp), which the component cannot reach, so the
+    // rule is reproduced here instead.  Out-of-range samples follow the core's
+    // JOC_CLIP_CONTINUE policy: truncated to the edge, and reported.
+    bool force_int24 = false;
 };
 
 // Channel count of a named layout, or 0 when the layout is not one of the
@@ -138,6 +147,28 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes = 0,
 // otherwise each launch ffmpeg for it.
 bool probe_container_joc(const std::string& ffmpeg_path, const std::string& path,
                          unsigned audio_index, bool* joc, std::string* detail);
+
+// ---- forced int24 delivery ------------------------------------------------
+//
+// The core's own int24 rule, reproduced byte for byte from
+// kernel/src/io/wav_writer.cpp: clip to [-1, 1], multiply by 8388607, truncate
+// toward zero (the core's comment: the int32 conversion is "identical to NumPy's
+// float32 -> int32 cast after clipping"), write the low three bytes, little
+// endian; a non-finite sample becomes 0, exactly as the core writes it.
+//
+// Sample values that have been through this are what foobar2000's int24 import
+// gives back, i.e. n / 2^23 (SDK/pfc audio_math.cpp:_import24).  That is the scale
+// a caller should use when it wants to check what the host received.
+constexpr double kInt24ImportScale = 8388608.0;
+
+struct Int24Block {
+    std::size_t clipped = 0;  // samples that were outside [-1, 1]
+    std::int32_t peak = 0;    // largest magnitude actually written
+};
+
+// Packs `count` interleaved float32 samples into `out`, which must hold
+// count * 3 bytes, and reports what the clip caught.
+Int24Block pack_int24(const float* interleaved, std::size_t count, std::uint8_t* out);
 
 class Engine {
 public:

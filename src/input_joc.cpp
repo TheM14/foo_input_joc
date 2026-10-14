@@ -354,14 +354,22 @@ public:
             channels = layout_channels != 0 ? layout_channels : 6;
             render = "speaker " + settings.speaker_layout;
         }
+        // The custom field and the log line state the delivery format, because it
+        // is the one thing about the output that a listener cannot hear.
+        if (settings.force_int24) render += ", 24-bit delivery";
 
         info.info_set("codec", "E-AC-3 JOC");
         info.info_set("codec_long", "E-AC-3 JOC (Dolby Atmos)");
         info.info_set("encoding", "lossy");
         info.info_set_int("samplerate", kSampleRate);
         info.info_set_int("channels", channels);
-        info.info_set_int("bitspersample", 32);
-        info.info_set("bitspersample_extra", "floating-point");
+        // What the component hands over, which is what the host keeps if it writes a
+        // file from this stream: float32 by default, int24 when forced.  This is also
+        // what foobar2000's own lossless-conversion warning reads
+        // (SDK file_info.cpp:is_encoding_float), so it has to use the SDK's convention:
+        // 32 bits with "floating-point", or a bit depth that is fixed-point by
+        // definition (anything but 32/64, with no extra field at all).
+        info.info_set_bitspersample(settings.force_int24 ? 24u : 32u, !settings.force_int24);
         info.set_length(duration);
         m_length = duration;
         // The renderer keeps its room tail, but the stream this component hands over
@@ -455,8 +463,15 @@ public:
         m_frames_delivered = 0;
         m_reported = false;
         m_delivery_mismatches = 0;
-        joc_log::line("decoder: engine ready, %u output channel(s), %u frames per read",
-                        m_channels, static_cast<unsigned>(kRunFrames));
+        // The clip total belongs to the file rather than to one run of it, so a seek
+        // does not clear it: the log line at the end of the stream is a statement
+        // about everything this component handed over.
+        m_clipped_samples = 0;
+        m_clip_reported = false;
+        joc_log::line("decoder: engine ready, %u output channel(s), %u frames per read, "
+                        "delivery=%s",
+                        m_channels, static_cast<unsigned>(kRunFrames),
+                        m_settings.force_int24 ? "int24" : "float32");
     }
 
     bool decode_run(audio_chunk& chunk, abort_callback& abort) {
@@ -472,6 +487,10 @@ public:
                             static_cast<unsigned long long>(m_frames_delivered),
                             m_delivery_mismatches == 0 ? ""
                                                        : " (the delivery changed samples)");
+            if (m_clipped_samples != 0) {
+                joc_log::line("decoder: forced int24 truncated %llu sample(s) in total",
+                              static_cast<unsigned long long>(m_clipped_samples));
+            }
             return false;
         }
 
@@ -479,30 +498,58 @@ public:
         // 32-bit builds and double on 64-bit ones (SDK audio_math.h): the samples are
         // converted, not copied.  set_data_32() is the SDK's conversion for a float32
         // source, and it sets the channel count, the sample rate and the sample count.
-        chunk.set_data_32(m_buffer.data(), frames, m_channels, kSampleRate);
+        //
+        // A forced int24 delivery goes the other way: the samples are packed to the
+        // core's int24 bytes and the host converts them back, so the audio the rest of
+        // the pipeline sees is the 24-bit grid rather than the renderer's float -- which
+        // is the whole point of the option.  The quantisation happens here and nowhere
+        // else, so a sample is rounded once.
+        double expected_delivered_peak = 0.0;
+        if (m_settings.force_int24) {
+            m_int24.resize(frames * m_channels * 3);
+            const joc_decode::Int24Block block = joc_decode::pack_int24(
+                m_buffer.data(), frames * m_channels, m_int24.data());
+            m_clipped_samples += block.clipped;
+            if (block.clipped != 0 && !m_clip_reported) {
+                m_clip_reported = true;
+                joc_log::line("decoder: forced int24: %llu sample(s) outside [-1,1] in this "
+                              "block are truncated to the edge (the core's clip policy; "
+                              "attenuate with the gain setting to avoid it)",
+                              static_cast<unsigned long long>(block.clipped));
+            }
+            chunk.set_data_fixedpoint_signed(m_int24.data(), m_int24.size(), kSampleRate,
+                                            m_channels, 24,
+                                            audio_chunk::g_guess_channel_config(m_channels));
+            expected_delivered_peak =
+                static_cast<double>(block.peak) / joc_decode::kInt24ImportScale;
+        } else {
+            chunk.set_data_32(m_buffer.data(), frames, m_channels, kSampleRate);
+            expected_delivered_peak = peak_of(m_buffer.data(), frames * m_channels);
+        }
 
         m_frames_delivered += frames;
         // A delivery that mangled the samples would be heard as noise rather than reported
         // as a failure, so every chunk is checked: the conversion is exact, and the peak of
-        // what the chunk holds has to equal the peak of what the renderer produced.
-        const double produced = peak_of(m_buffer.data(), frames * m_channels);
+        // what the chunk holds has to equal the peak of what the renderer produced -- or,
+        // for int24, the peak the packing step actually wrote.
         const double delivered =
             peak_of(chunk.get_data(), chunk.get_sample_count() * chunk.get_channels());
-        if (delivered > produced + 1e-6 + produced * 1e-6 ||
-            delivered < produced - 1e-6 - produced * 1e-6) {
+        if (delivered > expected_delivered_peak + 1e-6 + expected_delivered_peak * 1e-6 ||
+            delivered < expected_delivered_peak - 1e-6 - expected_delivered_peak * 1e-6) {
             ++m_delivery_mismatches;
             if (m_delivery_mismatches == 1) {
                 joc_log::line("decoder: delivery changed the samples: peak %.9f produced, "
                                 "%.9f delivered",
-                                produced, delivered);
+                                expected_delivered_peak, delivered);
             }
         }
         if (!m_reported) {
             m_reported = true;
-            joc_log::line("decoder: first %llu frames delivered (%u ch), peak %.6f, "
+            joc_log::line("decoder: first %llu frames delivered (%u ch, %s), peak %.6f, "
                             "delivered peak %.6f",
-                            static_cast<unsigned long long>(frames), m_channels, produced,
-                            delivered);
+                            static_cast<unsigned long long>(frames), m_channels,
+                            m_settings.force_int24 ? "int24" : "float32",
+                            peak_of(m_buffer.data(), frames * m_channels), delivered);
         }
         return true;
     }
@@ -605,6 +652,10 @@ private:
     unsigned m_audio_index = 0;
     joc_container::Result m_container;
     std::vector<float> m_buffer;
+    // int24 delivery: the packed bytes handed to the host, and what the clip caught.
+    std::vector<std::uint8_t> m_int24;
+    std::uint64_t m_clipped_samples = 0;
+    bool m_clip_reported = false;
     unsigned m_channels = 2;
     std::uint64_t m_frames_delivered = 0;
     bool m_reported = false;

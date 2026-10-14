@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <limits>
 #include <vector>
 
 // The kernel copy that is compiled into this component; see kernel/.
@@ -307,6 +308,45 @@ unsigned speaker_channels(const std::string& layout) {
         if (layout == kLayouts[i]) return kLayoutChannels[i];
     }
     return 0;
+}
+
+namespace {
+
+// The core's conversion, reproduced: kernel/src/io/wav_writer.cpp:to_int32.
+// (min)() is written that way because the test tools compile this file without
+// NOMINMAX, and windows.h's min macro would otherwise swallow the call.
+std::int32_t to_int32(const float value) {
+    if (!std::isfinite(value)) {
+        return (std::numeric_limits<std::int32_t>::min)();
+    }
+    return static_cast<std::int32_t>(value);
+}
+
+}  // namespace
+
+Int24Block pack_int24(const float* interleaved, std::size_t count, std::uint8_t* out) {
+    Int24Block block;
+    for (std::size_t i = 0; i < count; ++i) {
+        float value = interleaved[i];
+        if (value > 1.0f) {
+            value = 1.0f;
+            ++block.clipped;
+        } else if (value < -1.0f) {
+            value = -1.0f;
+            ++block.clipped;
+        }
+        const std::int32_t scaled = to_int32(value * 8388607.0f);
+        const std::uint32_t bits = static_cast<std::uint32_t>(scaled);
+        out[i * 3 + 0] = static_cast<std::uint8_t>(bits & 0xFFu);
+        out[i * 3 + 1] = static_cast<std::uint8_t>((bits >> 8) & 0xFFu);
+        out[i * 3 + 2] = static_cast<std::uint8_t>((bits >> 16) & 0xFFu);
+        // What the host will read back is the sign-extended low 24 bits.
+        std::int32_t written = static_cast<std::int32_t>(bits & 0xFFFFFFu);
+        if ((written & 0x800000) != 0) written -= 0x1000000;
+        const std::int32_t magnitude = (written < 0) ? -written : written;
+        if (magnitude > block.peak) block.peak = magnitude;
+    }
+    return block;
 }
 
 std::string component_directory() {

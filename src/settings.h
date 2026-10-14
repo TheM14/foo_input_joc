@@ -40,6 +40,8 @@ struct Values {
     bool gain_enabled = true;
     double gain_db = 0.0;
     double tail_seconds = 5.0;
+    // Deliver int24 instead of float32; see joc_decode::Settings::force_int24.
+    bool force_int24 = false;
     unsigned object_delay_samples = 1473;
     unsigned native_threads = 0;
     std::string ffmpeg_path = "ffmpeg";

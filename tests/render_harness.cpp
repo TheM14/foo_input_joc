@@ -4,6 +4,7 @@
 //
 //   render_harness --input <file.eac3> --output <out.wav> [options]
 //     --mode binaural|speaker     default binaural
+//     --format float32|int24      delivered sample format (default float32)
 //     --layout NAME               speaker layout (default 7.1)
 //     --hrtf-source sofa|rosella  kind of model --hrtf points at (default sofa)
 //     --hrtf PATH                 HRTF to render with; supplied by the caller and
@@ -36,8 +37,14 @@
 // It exists because the plugin's engine (src/joc_decode.*) has no foobar2000
 // dependency: the very code that plays in foobar2000 can be run here, against the
 // reference renderer or against the same engine's continuous render.  The WAV header
-// mirrors the renderer's own writer: a simple IEEE-float header up to two channels,
-// WAVE_FORMAT_EXTENSIBLE above that with a channel mask of zero.
+// mirrors the renderer's own writer: a simple header up to two channels,
+// WAVE_FORMAT_EXTENSIBLE above that with a channel mask of zero -- for float32
+// (IEEE_FLOAT) and for int24 (PCM) alike.
+//
+// --format int24 is the byte-for-byte counterpart of the CLI's
+// --speaker-format/--binaural-format int24: the component renders float32 and the
+// int24 packing is the core's own rule (src/joc_decode.h:pack_int24), so the file
+// this writes is directly comparable with the one the reference writes.
 
 #include <cstdio>
 #include <thread>
@@ -54,6 +61,7 @@ struct Options {
     std::string input;
     std::string output;
     std::string mode = "binaural";
+    std::string format = "float32";  // float32 | int24
     std::string layout = "7.1";
     std::string hrtf;                  // SOFA file, or Rosella model file
     std::string hrtf_source = "sofa";  // sofa | rosella
@@ -83,33 +91,37 @@ void put_u32(std::string* out, unsigned long long value) {
     for (int i = 0; i < 4; ++i) out->push_back(static_cast<char>((value >> (8 * i)) & 0xFFu));
 }
 
-// Same bytes the core's wav_writer produces.
-std::string wav_header(unsigned channels, unsigned rate, std::uint64_t frames) {
-    const unsigned bytes_per_sample = 4;
+// Same bytes the core's wav_writer produces, for either format it can write.
+std::string wav_header(unsigned channels, unsigned rate, std::uint64_t frames, bool int24) {
+    const unsigned bytes_per_sample = int24 ? 3u : 4u;
+    const unsigned bits_per_sample = 8u * bytes_per_sample;
     const unsigned block_align = channels * bytes_per_sample;
     const std::uint64_t data_bytes = frames * block_align;
 
     std::string fmt;
     if (channels <= 2) {
-        put_u16(&fmt, 3);  // WAVE_FORMAT_IEEE_FLOAT
+        put_u16(&fmt, int24 ? 0x0001u : 0x0003u);  // WAVE_FORMAT_PCM / IEEE_FLOAT
         put_u16(&fmt, channels);
         put_u32(&fmt, rate);
         put_u32(&fmt, rate * block_align);
         put_u16(&fmt, block_align);
-        put_u16(&fmt, 8 * bytes_per_sample);
+        put_u16(&fmt, bits_per_sample);
     } else {
         put_u16(&fmt, 0xFFFE);  // WAVE_FORMAT_EXTENSIBLE
         put_u16(&fmt, channels);
         put_u32(&fmt, rate);
         put_u32(&fmt, rate * block_align);
         put_u16(&fmt, block_align);
-        put_u16(&fmt, 8 * bytes_per_sample);
+        put_u16(&fmt, bits_per_sample);
         put_u16(&fmt, 22);      // cbSize
-        put_u16(&fmt, 8 * bytes_per_sample);
+        put_u16(&fmt, bits_per_sample);
         put_u32(&fmt, 0);       // channel mask, as the core writes it
         static const unsigned char kFloatGuid[16] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
                                                      0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
-        fmt.append(reinterpret_cast<const char*>(kFloatGuid), 16);
+        static const unsigned char kPcmGuid[16] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
+                                                   0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
+        const unsigned char* guid = int24 ? kPcmGuid : kFloatGuid;
+        fmt.append(reinterpret_cast<const char*>(guid), 16);
     }
 
     std::string header;
@@ -131,6 +143,7 @@ bool parse(int argc, char** argv, Options* options) {
         if (arg == "--input") options->input = next();
         else if (arg == "--output") options->output = next();
         else if (arg == "--mode") options->mode = next();
+        else if (arg == "--format") options->format = next();
         else if (arg == "--layout") options->layout = next();
         else if (arg == "--hrtf") options->hrtf = next();
         else if (arg == "--hrtf-source") options->hrtf_source = next();
@@ -165,6 +178,10 @@ bool parse(int argc, char** argv, Options* options) {
             return false;
         }
     }
+    if (options->format != "float32" && options->format != "int24") {
+        std::fprintf(stderr, "render_harness: --format wants float32 or int24\n");
+        return false;
+    }
     return !options->input.empty() && !options->output.empty();
 }
 
@@ -190,13 +207,18 @@ bool render_once(const joc_decode::Settings& settings, const Options& options,
         return false;
     }
     // The header carries the length, so write a placeholder and come back to it.
-    const std::string header = wav_header(channels, 48000, 0);
+    const bool int24 = settings.force_int24;
+    const std::string header = wav_header(channels, 48000, 0, int24);
     std::fwrite(header.data(), 1, header.size(), file);
 
     constexpr std::size_t kChunk = 4096;
     std::vector<float> buffer(kChunk * channels);
+    std::vector<std::uint8_t> packed;
     std::uint64_t frames_written = 0;
     double peak = 0.0;
+    // What the int24 packing wrote, so the run reports the grid it delivered.
+    std::uint64_t clipped_samples = 0;
+    std::int32_t grid_peak = 0;
     std::vector<char> applied(options.seeks_at.size(), 0);
     for (;;) {
         for (std::size_t i = 0; i < options.seeks_at.size(); ++i) {
@@ -226,19 +248,34 @@ bool render_once(const joc_decode::Settings& settings, const Options& options,
                                                   : static_cast<double>(buffer[i]);
             if (value > peak) peak = value;
         }
-        std::fwrite(buffer.data(), sizeof(float), frames * channels, file);
+        if (int24) {
+            packed.resize(frames * channels * 3u);
+            const joc_decode::Int24Block block =
+                joc_decode::pack_int24(buffer.data(), frames * channels, packed.data());
+            clipped_samples += block.clipped;
+            if (block.peak > grid_peak) grid_peak = block.peak;
+            std::fwrite(packed.data(), 1, packed.size(), file);
+        } else {
+            std::fwrite(buffer.data(), sizeof(float), frames * channels, file);
+        }
         frames_written += frames;
     }
     engine.stop();
 
-    const std::string final_header = wav_header(channels, 48000, frames_written);
+    const std::string final_header = wav_header(channels, 48000, frames_written, int24);
     std::fseek(file, 0, SEEK_SET);
     std::fwrite(final_header.data(), 1, final_header.size(), file);
     std::fclose(file);
 
     std::printf("render_harness: %s -> %s\n", options.input.c_str(), output.c_str());
-    std::printf("  channels=%u frames=%llu peak=%.9f\n", channels,
-                static_cast<unsigned long long>(frames_written), peak);
+    std::printf("  channels=%u frames=%llu format=%s peak=%.9f\n", channels,
+                static_cast<unsigned long long>(frames_written),
+                int24 ? "int24" : "float32", peak);
+    if (int24) {
+        std::printf("  int24 grid_peak=%.9f clipped=%llu\n",
+                    static_cast<double>(grid_peak) / joc_decode::kInt24ImportScale,
+                    static_cast<unsigned long long>(clipped_samples));
+    }
     return true;
 }
 
@@ -253,7 +290,8 @@ int main(int argc, char** argv) {
     if (!parse(argc, argv, &options)) {
         std::fprintf(stderr,
                      "usage: render_harness --input <eac3> --output <wav> [--mode binaural|speaker]\n"
-                     "       [--layout NAME] [--hrtf-source sofa|rosella] [--hrtf PATH]\n"
+                     "       [--format float32|int24] [--layout NAME]\n"
+                     "       [--hrtf-source sofa|rosella] [--hrtf PATH]\n"
                      "       [--gain-db X] [--tail S] [--ffmpeg path] [--max-frames N]\n"
                      "       [--max-input-frames N] [--seek-to S] [--seek-at N:S]\n"
                      "       [--total-seconds S] [--pipeline-delay N] [--preroll-frames N]\n"
@@ -279,6 +317,8 @@ int main(int argc, char** argv) {
     settings.input_kind = options.container ? joc_decode::InputKind::kContainer
                                            : joc_decode::InputKind::kBare;
     settings.audio_index = options.audio_index;
+    // The engine always renders float32; the flag is what the writer above packs.
+    settings.force_int24 = (options.format == "int24");
 
     std::string error;
     if (options.parallel != 0) {
