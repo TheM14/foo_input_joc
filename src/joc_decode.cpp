@@ -27,7 +27,11 @@ constexpr std::uint64_t kEac3FramesPerRead = 3u;
 // Rendered audio the caller has not taken yet.
 constexpr std::size_t kMaxRenderedAheadSamples = 4096u;
 constexpr std::size_t kBedFramesChunk = 8192u;       // staging capacity, in frames
-constexpr std::size_t kBedChannels = 6;              // ffmpeg -ac 6
+// The bed channel count follows joc_dmx_config_idx: the 5.1 configurations
+// (0 and 3) decode to 6 channels through `ffmpeg -ac 6`, the 7-channel ones
+// (1, 2 and 4) to 8 channels in the decoder's own layout.  See bed_channels.
+constexpr std::size_t kDefaultBedChannels = 6;
+constexpr std::size_t kMaxBedChannels = 8;
 // A read on an anonymous pipe only completes once the whole request is available,
 // so each read asks for a slice ffmpeg can always fill, and the pipe buffer is
 // sized well above that slice.  Requesting the whole staging buffer deadlocks:
@@ -63,6 +67,30 @@ bool has_mov_timeline(const std::string& path) {
     return false;
 }
 
+// joc_dmx_config_idx of the first syncframe in the window that carries JOC, or -1
+// when the window holds none.  Only the first three bits of the JOC payload are
+// read, so this costs nothing next to a decode.
+int scan_config_idx(const std::uint8_t* data, std::size_t size) {
+    std::size_t offset = 0;
+    while (offset + 6u <= size) {
+        const std::size_t bytes = joc_eac3::frame_bytes_at(data, size, offset);
+        if (bytes == 0 || offset + bytes > size) break;
+        if (joc_eac3::frame_has_joc(data + offset, bytes)) {
+            unsigned config = 0;
+            if (joc_eac3::joc_config_idx(data + offset, bytes, &config)) {
+                return static_cast<int>(config);
+            }
+        }
+        offset += bytes;
+    }
+    return -1;
+}
+
+// True when the JOC configuration declares 7 core channels.
+bool seven_channel_config(int config) {
+    return config == 1 || config == 2 || config == 4;
+}
+
 // ---------------------------------------------------------------------------
 // Kernel entry points.
 //
@@ -83,6 +111,7 @@ struct CoreApi {
     std::uint32_t(JOC_CALL* abi_version)() = joc_abi_version;
     const char*(JOC_CALL* version_string)() = joc_version_string;
     const char*(JOC_CALL* error_name)(joc_error) = joc_error_name;
+    const char*(JOC_CALL* last_error_detail)() = joc_last_error_detail;
 };
 
 bool file_exists(const std::string& path) {
@@ -109,6 +138,22 @@ const char* error_text(const CoreApi& api, joc_error code) {
         if (name != nullptr) return name;
     }
     return "unknown core error";
+}
+
+// The core keeps a structured detail for the last failing call ("eac3: chanmap
+// declares [Lts,Rts] but joc_dmx_config_idx=2 expects [Vhl,Vhr]").  The plugin
+// reports the variant rather than only its error code, so a stream the renderer
+// deliberately refuses says why.
+std::string error_with_detail(const CoreApi& api, joc_error code) {
+    std::string text = error_text(api, code);
+    if (api.last_error_detail != nullptr) {
+        const char* detail = api.last_error_detail();
+        if (detail != nullptr && *detail != '\0') {
+            text += ": ";
+            text += detail;
+        }
+    }
+    return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,40 +471,47 @@ FileProbe probe_file(const std::string& path, std::size_t max_scan_bytes,
         return probe;
     }
 
+    // The renderer pairs one audio frame with exactly 1536 bed samples, so the
+    // stream length is counted in audio frames: a 7-channel program interleaves an
+    // independent and a dependent substream, and one audio frame is two syncframes.
+    const bool whole_file = (buffer.size() == stream_bytes);
+    std::size_t offset = 0;
+    std::size_t first_audio_frame = 0;
+    bool same_audio_frame_size = true;
+    std::uint64_t seen = 0;
+    while (true) {
+        const std::size_t bytes =
+            joc_eac3::audio_frame_bytes_at(buffer.data(), got, offset, whole_file);
+        if (bytes == 0 || offset + bytes > got) break;
+        if (seen == 0) {
+            first_audio_frame = bytes;
+        } else if (bytes != first_audio_frame) {
+            same_audio_frame_size = false;
+        }
+        offset += bytes;
+        ++seen;
+    }
+
     std::uint64_t frames = 0;
-    if (buffer.size() == stream_bytes) {
-        std::size_t offset = 0;
-        while (true) {
-            const std::size_t bytes = joc_eac3::frame_bytes_at(buffer.data(), got, offset);
-            if (bytes == 0 || offset + bytes > got) break;
-            offset += bytes;
-            ++frames;
-        }
+    if (whole_file) {
+        frames = seen;
         probe.detail = "frame count walked over the whole file";
-    } else if (scan.all_frames_same_size) {
-        frames = stream_bytes / scan.first_frame_bytes;
+    } else if (seen != 0 && same_audio_frame_size) {
+        frames = stream_bytes / first_audio_frame;
         probe.detail = "frame count extrapolated from a constant frame size";
-    } else {
+    } else if (offset != 0) {
         // Variable frame size: count in the window and scale by the byte ratio.
-        std::size_t offset = 0;
-        std::uint64_t seen = 0;
-        while (true) {
-            const std::size_t bytes = joc_eac3::frame_bytes_at(buffer.data(), got, offset);
-            if (bytes == 0 || offset + bytes > got) break;
-            offset += bytes;
-            ++seen;
-        }
-        frames = (offset != 0) ? static_cast<std::uint64_t>(
-                                     (static_cast<double>(stream_bytes) /
-                                      static_cast<double>(offset)) *
-                                     static_cast<double>(seen))
-                               : 0;
+        frames = static_cast<std::uint64_t>(
+            (static_cast<double>(stream_bytes) / static_cast<double>(offset)) *
+            static_cast<double>(seen));
         probe.detail = "frame count estimated from a variable frame size";
     }
 
+    const int config = scan_config_idx(buffer.data(), got);
     probe.frames = frames;
     probe.sample_rate = 48000;
-    probe.channels = 6;  // the core audio of an E-AC-3 JOC stream
+    // Core audio channel count: the 5.1 configurations give 6, the 7-channel ones 8.
+    probe.channels = static_cast<unsigned>(seven_channel_config(config) ? 8 : 6);
     probe.duration_seconds =
         static_cast<double>(frames) * static_cast<double>(kFrameSamples) / 48000.0;
     return probe;
@@ -570,7 +622,10 @@ struct Engine::Impl {
     }
 
     unsigned channels = 0;
-    std::uint64_t frames_queued = 0;    // E-AC-3 frames handed to the core
+    // Decoded bed channel count, resolved from joc_dmx_config_idx before the bed
+    // decoder starts: 6 for configurations 0/3, 8 for 1/2/4.
+    std::size_t bed_channels = kDefaultBedChannels;
+    std::uint64_t frames_queued = 0;    // audio frames handed to the core
     std::uint64_t bed_frames_pushed = 0;
     bool eac3_eof = false;
     bool bed_eof = false;
@@ -650,6 +705,10 @@ struct Engine::Impl {
     bool position_bare(std::uint64_t frame, std::string* error);
     bool start_bed(std::uint64_t source_sample, std::string* error);
     bool start_metadata(std::string* error);
+    // Resolves bed_channels from the stream's own joc_dmx_config_idx.  For a
+    // container this starts the metadata pipe once, reads a prefix and stops it
+    // again; for a bare stream it reads a prefix from the file and seeks back.
+    bool resolve_bed_channels(std::string* error);
 };
 
 bool Engine::Impl::grow_frame_index(std::uint64_t wanted, std::string* error) {
@@ -681,9 +740,14 @@ bool Engine::Impl::grow_frame_index(std::uint64_t wanted, std::string* error) {
             index_complete = true;
             break;
         }
+        // The index holds audio frames, not syncframes: the renderer consumes one
+        // bed frame per audio frame, and a 7-channel program makes two syncframes
+        // into one audio frame.
+        const bool at_end = (index_file_offset + got >= size);
         std::size_t consumed = 0;
         while (frame_offsets.size() < wanted) {
-            const std::size_t bytes = joc_eac3::frame_bytes_at(buffer.data(), got, consumed);
+            const std::size_t bytes =
+                joc_eac3::audio_frame_bytes_at(buffer.data(), got, consumed, at_end);
             if (bytes == 0 || consumed + bytes > got) break;
             frame_offsets.push_back(index_stream_offset + consumed);
             consumed += bytes;
@@ -734,12 +798,48 @@ bool Engine::Impl::position_bare(std::uint64_t frame, std::string* error) {
     return true;
 }
 
+bool Engine::Impl::resolve_bed_channels(std::string* error) {
+    bed_channels = kDefaultBedChannels;
+    std::vector<std::uint8_t> buffer(1u << 20);
+    int config = -1;
+    if (eac3_from_pipe) {
+        // The metadata stream has to run once to be sniffed; it is stopped again and
+        // restarted from the beginning, which costs one extra ffmpeg spawn per track.
+        if (!start_metadata(error)) return false;
+        const std::size_t got = eac3_pipe.read(buffer.data(), buffer.size());
+        eac3_pipe.stop();
+        config = scan_config_idx(buffer.data(), got);
+    } else {
+        if (!eac3.is_open() && !eac3.open(input_path)) {
+            if (error != nullptr) *error = "cannot open the input file";
+            return false;
+        }
+        const std::size_t got = eac3.read(buffer.data(), buffer.size());
+        config = scan_config_idx(buffer.data(), got);
+        // Put the file back where the feed loop expects it.
+        if (!eac3.seek(index_base)) {
+            if (error != nullptr) *error = "cannot position the input file";
+            return false;
+        }
+    }
+    bed_channels = seven_channel_config(config)
+                       ? static_cast<std::size_t>(7u + 1u)
+                       : kDefaultBedChannels;
+    if (bed_channels > kMaxBedChannels) bed_channels = kMaxBedChannels;
+    joc_log::line("core: joc_dmx_config_idx=%d -> %llu bed channel(s)", config,
+                  static_cast<unsigned long long>(bed_channels));
+    return true;
+}
+
 bool Engine::Impl::start_bed(std::uint64_t source_sample, std::string* error) {
-    // The 5.1 core PCM, exactly as the reference renderer's own core decode does
-    // it: 5.1 interleaved float32 at 48 kHz, the layout the renderer expects
-    // (L R C LFE Ls Rs).
+    // The core PCM the kernel expects: interleaved float32 at 48 kHz, laid out as
+    // L R C LFE Ls Rs for 5.1 and L R C LFE BL BR SL SR for 7.1.
     // -drc_scale 0 -target_level 0: the bed is taken as stored, without the
     // stream's dynrng or target-level metadata being applied by the decoder.
+    //
+    // -ac is only passed for the 5.1 configurations: `-ac 6` downmixes 5.1.2/7.1
+    // into 5.1 and drops the extra pair, and `-ac 8` would remap 5.1.2 into 7.1.
+    // The 7-channel configurations take the decoder's own layout instead.
     //
     // -ss is an input option: the demuxer is positioned on the frame boundary and
     // decoding starts there, so a seek costs the same wherever it lands.  The price is
@@ -752,7 +852,11 @@ bool Engine::Impl::start_bed(std::uint64_t source_sample, std::string* error) {
     if (!offset.empty()) input_arguments += L" -ss " + offset;
     std::wstring bed_arguments = L"-map 0:a:";
     bed_arguments += std::to_wstring(settings.audio_index);
-    bed_arguments += L" -vn -ac 6 -ar 48000 -c:a pcm_f32le -f f32le -";
+    bed_arguments += L" -vn";
+    if (bed_channels == kDefaultBedChannels) {
+        bed_arguments += L" -ac 6";
+    }
+    bed_arguments += L" -ar 48000 -c:a pcm_f32le -f f32le -";
     return bed.start(settings.ffmpeg_path, input_path, input_arguments, bed_arguments, "bed",
                      stderr_path_for(L"joc_ffmpeg_bed.log"), error);
 }
@@ -804,7 +908,6 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
     impl.reset_feed_state();
     impl.end_sample = sample_of_seconds(settings.length_seconds);
     impl.eac3_buffer.resize(kEac3Chunk);
-    impl.bed_buffer.resize(kBedFramesChunk * kBedChannels);
 
     if (!load_api(std::string(), &impl.api, error)) return false;
     const std::uint32_t abi = impl.api.abi_version();
@@ -833,6 +936,11 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
             return false;
         }
     }
+
+    // The bed decoder has to know how many channels to produce before it starts,
+    // and that comes from the stream's own joc_dmx_config_idx.
+    if (!impl.resolve_bed_channels(error)) return false;
+    impl.bed_buffer.resize(kBedFramesChunk * impl.bed_channels);
 
     joc_stream_config config{};
     config.struct_size = sizeof(config);
@@ -888,7 +996,7 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
     if (created != JOC_OK) {
         if (error != nullptr) {
             *error = std::string("cannot create the render stream: ") +
-                     error_text(impl.api, created);
+                     error_with_detail(impl.api, created);
         }
         return false;
     }
@@ -972,7 +1080,7 @@ bool Engine::seek(double seconds, double total_seconds, std::string* error) {
     if (reset != JOC_OK) {
         if (error != nullptr) {
             *error = std::string("cannot reset the render stream: ") +
-                     error_text(impl.api, reset);
+                     error_with_detail(impl.api, reset);
         }
         return false;
     }
@@ -1042,6 +1150,10 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
             const std::size_t got = impl.read_eac3(impl.eac3_buffer.data() + impl.eac3_carry,
                                                    impl.eac3_buffer.size() - impl.eac3_carry);
             std::size_t total = impl.eac3_carry + got;
+            // A read that returns nothing means no more bytes will arrive, so the
+            // audio frame still open in the buffer is complete by definition.  Without
+            // this the last audio frame of every file is left in the carry.
+            const bool at_eof = (got == 0) || impl.eac3_eof;
             if (total == 0) {
                 impl.eac3_eof = true;
             } else {
@@ -1051,8 +1163,8 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                 if (impl.metadata_skip != 0) {
                     std::size_t dropped = 0;
                     while (impl.metadata_skip != 0) {
-                        const std::size_t bytes =
-                            joc_eac3::frame_bytes_at(impl.eac3_buffer.data(), total, dropped);
+                        const std::size_t bytes = joc_eac3::audio_frame_bytes_at(
+                            impl.eac3_buffer.data(), total, dropped, at_eof);
                         if (bytes == 0 || dropped + bytes > total) break;
                         dropped += bytes;
                         --impl.metadata_skip;
@@ -1074,8 +1186,8 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                 std::size_t offset = 0;
                 std::uint64_t complete = 0;
                 while (true) {
-                    const std::size_t bytes =
-                        joc_eac3::frame_bytes_at(impl.eac3_buffer.data(), total, offset);
+                    const std::size_t bytes = joc_eac3::audio_frame_bytes_at(
+                        impl.eac3_buffer.data(), total, offset, at_eof);
                     if (bytes == 0 || offset + bytes > total) break;
                     offset += bytes;
                     ++complete;
@@ -1096,8 +1208,8 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                     pushed_frames = allowed;
                     std::size_t walk = 0;
                     for (std::uint64_t index = 0; index < pushed_frames; ++index) {
-                        const std::size_t bytes = joc_eac3::frame_bytes_at(
-                            impl.eac3_buffer.data(), total, walk);
+                        const std::size_t bytes = joc_eac3::audio_frame_bytes_at(
+                            impl.eac3_buffer.data(), total, walk, at_eof);
                         if (bytes == 0 || walk + bytes > total) break;
                         walk += bytes;
                     }
@@ -1113,7 +1225,7 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                 if (pushed != JOC_OK) {
                     if (error != nullptr) {
                         *error = std::string("E-AC-3 push failed: ") +
-                                 error_text(impl.api, pushed);
+                                 error_with_detail(impl.api, pushed);
                     }
                     return 0;
                 }
@@ -1136,27 +1248,27 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
         // return any number of bytes, and rounding a read down to whole samples
         // quietly drops the rest of the stream's alignment.
         while (!impl.bed_eof && impl.bed_frames_pushed < impl.frames_queued) {
-            constexpr std::size_t kFrameBytes = kFrameSamples * kBedChannels * sizeof(float);
-            const std::size_t whole_frames = impl.bed_staged_bytes / kFrameBytes;
+            const std::size_t frame_bytes = kFrameSamples * impl.bed_channels * sizeof(float);
+            const std::size_t whole_frames = impl.bed_staged_bytes / frame_bytes;
             if (whole_frames != 0) {
                 joc_stream_buffer input{};
                 input.struct_size = sizeof(input);
                 input.struct_version = 1;
                 input.kind = JOC_STREAM_IN_CORE_PCM;
                 input.pcm = impl.bed_buffer.data();
-                input.channels = static_cast<std::uint32_t>(kBedChannels);
+                input.channels = static_cast<std::uint32_t>(impl.bed_channels);
                 input.sample_rate = 48000;
                 input.sample_count = static_cast<std::uint32_t>(whole_frames * kFrameSamples);
                 const joc_error pushed = impl.api.push(impl.stream, &input, nullptr, nullptr);
                 if (pushed != JOC_OK) {
                     if (error != nullptr) {
                         *error = std::string("core PCM push failed: ") +
-                                 error_text(impl.api, pushed);
+                                 error_with_detail(impl.api, pushed);
                     }
                     return 0;
                 }
                 impl.bed_frames_pushed += whole_frames;
-                const std::size_t pushed_bytes = whole_frames * kFrameBytes;
+                const std::size_t pushed_bytes = whole_frames * frame_bytes;
                 impl.bed_staged_bytes -= pushed_bytes;
                 if (impl.bed_staged_bytes != 0) {
                     std::memmove(impl.bed_buffer.data(),
@@ -1198,7 +1310,7 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
         const joc_error pulled = impl.api.pull(impl.stream, &output, &produced);
         if (pulled != JOC_OK) {
             if (error != nullptr) {
-                *error = std::string("pull failed: ") + error_text(impl.api, pulled);
+                *error = std::string("pull failed: ") + error_with_detail(impl.api, pulled);
             }
             return 0;
         }
@@ -1248,7 +1360,7 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                 const joc_error flushed = impl.api.flush(impl.stream);
                 if (flushed != JOC_OK) {
                     if (error != nullptr) {
-                        *error = std::string("flush failed: ") + error_text(impl.api, flushed);
+                        *error = std::string("flush failed: ") + error_with_detail(impl.api, flushed);
                     }
                     return 0;
                 }
@@ -1267,6 +1379,22 @@ std::size_t Engine::read(float* destination, std::size_t frames, std::string* er
                         static_cast<unsigned long long>(status.frames_out),
                         static_cast<unsigned long long>(status.samples_out),
                         static_cast<unsigned long long>(status.buffered_samples));
+                    // Metadata the renderer had to work around; each one is per audio
+                    // frame and a non-zero count is worth reporting with the rest.
+                    if (status.missing_joc_frames != 0u || status.objects_clamped_frames != 0u ||
+                        status.extra_container_frames != 0u ||
+                        status.chanmap_pair_mismatch_frames != 0u ||
+                        status.bed_mask_mismatch_frames != 0u) {
+                        joc_log::line(
+                            "core: metadata workarounds: missing_joc_frames=%llu "
+                            "objects_clamped_frames=%llu extra_container_frames=%llu "
+                            "chanmap_pair_mismatch_frames=%llu bed_mask_mismatch_frames=%llu",
+                            static_cast<unsigned long long>(status.missing_joc_frames),
+                            static_cast<unsigned long long>(status.objects_clamped_frames),
+                            static_cast<unsigned long long>(status.extra_container_frames),
+                            static_cast<unsigned long long>(status.chanmap_pair_mismatch_frames),
+                            static_cast<unsigned long long>(status.bed_mask_mismatch_frames));
+                    }
                     joc_log::line("core: bed bytes read=%llu, staged samples left=%llu",
                                     static_cast<unsigned long long>(impl.bed_bytes_read),
                                     static_cast<unsigned long long>(impl.bed_staged_bytes));

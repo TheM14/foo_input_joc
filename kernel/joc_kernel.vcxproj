@@ -219,6 +219,7 @@
     <ClInclude Include="include\eac3joc_core.h" />
     <ClInclude Include="include\joc_core.h" />
     <ClInclude Include="include\joc_stream.h" />
+    <ClInclude Include="include\joc_version.h" />
     <ClInclude Include="src\adm\adm_metadata.h" />
     <ClInclude Include="src\adm\adm_tracks.h" />
     <ClInclude Include="src\binaural\binaural_runtime.h" />

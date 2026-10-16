@@ -4,17 +4,14 @@
 // drives when the output has to be compared byte for byte against joc_cli.
 //
 // Two inputs are needed to render, and they come from different places:
-//   * the bare E-AC-3 syncframes -- the metadata stream -- read straight from the
-//     file, since the plugin only claims bare .eac3/.ec3 today;
+//   * the E-AC-3 syncframes -- the metadata stream -- read straight from the file;
 //   * the 5.1 core PCM of those same frames -- the rendering core does not decode
-//     the core (it has no AC-3 decoder at all), so ffmpeg produces it exactly the
-//     way the reference CLI does.
+//     the core (it has no AC-3 decoder at all), so ffmpeg produces it.
 //
-// The core is loaded from joc_core.dll through the public C ABI and called via
-// function pointers.  Static linking is not an option: the core's static library
-// carries the internals but not the API layer in src/api, and the plugin is not
-// allowed to compile core sources.  Loading explicitly also lets the component
-// ship its own copy of the DLL and check its ABI version at start-up.
+// The core is the C++ kernel under kernel/, compiled into this component and called
+// through its public C API via the CoreApi table.  No DLL is shipped or loaded: the
+// table is filled with the linked entry points and start-up only checks the ABI
+// version.
 #pragma once
 
 #include <cstddef>

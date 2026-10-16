@@ -3,8 +3,9 @@
 [简体中文](README.md) · [Install](#install) · [Settings](#settings) · [Building](#building) · [Known limitations](#known-limitations)
 
 A foobar2000 input component for **E-AC-3 JOC (Dolby Atmos)** files: the JOC object and OAMD
-metadata is taken from the E-AC-3 syncframes and paired with the 5.1 core PCM that ffmpeg
-decodes, then rendered in real time to headphones (HRTF) or to a speaker layout up to 7.1. The
+metadata is taken from the E-AC-3 syncframes and paired with the core PCM that ffmpeg decodes
+(5.1 or 7 channels, following $joc\_dmx\_config\_idx$), then rendered in real time to headphones
+(HRTF) or to a speaker layout up to 7.1. The
 rendering core is compiled into the component, so there is nothing to install beside
 `foo_input_joc.dll`.
 
@@ -112,6 +113,10 @@ every container in the library, which is where the volume comes from.
 ## Known limitations
 
 * ADM BWF output is not implemented.
+* All five $joc\_dmx\_config\_idx$ configurations are supported: the bed is paired per audio
+  frame, and its channel count follows the configuration (6 channels for 0/3, 8 for 1/2/4), with
+  `-ac 6` passed to ffmpeg only for the 6-channel ones. An AC-3 core plus a dependent substream
+  (`strmtyp=1`) and a first audio frame without JOC are both normal cases.
 * A container is only claimed when this component is ahead of the built-in container reader in
   Preferences → Decoding (see [Install](#containers-need-one-look-at-the-decoder-list)); the core
   does not let a decoder ask for a file another entry has already taken. Such a file's tags stay

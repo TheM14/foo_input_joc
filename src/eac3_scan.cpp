@@ -249,14 +249,118 @@ bool contains_payload(const std::uint8_t* frame, std::size_t size, std::uint8_t 
 
 }  // namespace
 
-std::size_t frame_bytes_at(const std::uint8_t* data, std::size_t size, std::size_t offset) {
-    if (data == nullptr || offset + 4u > size) return 0;
+namespace {
+
+std::uint32_t read_bits(const std::uint8_t* data, std::size_t start, std::size_t count) {
+    std::uint32_t value = 0;
+    for (std::size_t index = start; index < start + count; ++index) {
+        value = (value << 1) | ((data[index >> 3] >> (7u - (index & 7u))) & 1u);
+    }
+    return value;
+}
+
+// AC-3 syncframe length in 16-bit words, indexed by fscod then frmsizecod.
+const std::uint16_t kAc3FrameWords[3][38] = {
+    {64, 64, 80, 80, 96, 96, 112, 112, 128, 128, 160, 160, 192, 192, 224, 224,
+     256, 256, 320, 320, 384, 384, 448, 448, 512, 512, 640, 640, 768, 768,
+     896, 896, 1024, 1024, 1152, 1152, 1280, 1280},
+    {69, 70, 87, 88, 104, 105, 121, 122, 139, 140, 174, 175, 208, 209, 243, 244,
+     278, 278, 348, 348, 417, 418, 487, 487, 557, 557, 696, 696, 835, 835,
+     975, 975, 1114, 1114, 1253, 1253, 1393, 1393},
+    {96, 96, 120, 120, 144, 144, 168, 168, 192, 192, 240, 240, 288, 288, 336, 336,
+     384, 384, 480, 480, 576, 576, 672, 672, 768, 768, 960, 960, 1152, 1152,
+     1344, 1344, 1536, 1536, 1728, 1728, 1920, 1920},
+};
+
+}  // namespace
+
+std::size_t frame_header_at(const std::uint8_t* data, std::size_t size, std::size_t offset,
+                            FrameHeader* out) {
+    if (data == nullptr || offset + 6u > size) return 0;
     const std::uint16_t syncword =
         static_cast<std::uint16_t>((static_cast<std::uint16_t>(data[offset]) << 8) | data[offset + 1]);
     if (syncword != kEac3Syncword) return 0;
+    const std::size_t base = offset * 8u;
+    const std::uint32_t bsid = read_bits(data, base + 40u, 5u);
+    if (bsid <= 8u) {
+        const std::uint32_t fscod = read_bits(data, base + 32u, 2u);
+        const std::uint32_t frmsizecod = read_bits(data, base + 34u, 6u);
+        if (fscod > 2u || frmsizecod >= 38u) return 0;
+        if (out != nullptr) {
+            out->frame_bytes = static_cast<std::size_t>(kAc3FrameWords[fscod][frmsizecod]) * 2u;
+            out->offset = offset;
+            out->codec = 0;
+            out->strmtyp = 0;
+            out->substreamid = 0;
+        }
+        return static_cast<std::size_t>(kAc3FrameWords[fscod][frmsizecod]) * 2u;
+    }
     const std::size_t words =
         (static_cast<std::size_t>(data[offset + 2] & 0x07u) << 8) | data[offset + 3];
+    if (out != nullptr) {
+        out->frame_bytes = (words + 1u) * 2u;
+        out->offset = offset;
+        out->codec = 1;
+        out->strmtyp = static_cast<std::uint8_t>(read_bits(data, base + 16u, 2u));
+        out->substreamid = static_cast<std::uint8_t>(read_bits(data, base + 18u, 3u));
+    }
     return (words + 1u) * 2u;
+}
+
+std::size_t frame_bytes_at(const std::uint8_t* data, std::size_t size, std::size_t offset) {
+    return frame_header_at(data, size, offset, nullptr);
+}
+
+std::size_t audio_frame_bytes_at(const std::uint8_t* data, std::size_t size, std::size_t offset,
+                                 bool end_of_stream) {
+    constexpr std::size_t kMaxSubstreams = 8;
+    FrameHeader seen[kMaxSubstreams];
+    std::size_t count = 0;
+    std::size_t consumed = 0;
+    while (count < kMaxSubstreams) {
+        FrameHeader header;
+        const std::size_t bytes = frame_header_at(data, size, offset + consumed, &header);
+        if (bytes == 0 || offset + consumed + bytes > size) break;
+        bool repeats = false;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (seen[index].same_stream(header)) {
+                repeats = true;
+                break;
+            }
+        }
+        if (repeats) return consumed;
+        seen[count++] = header;
+        consumed += bytes;
+    }
+    if (count != 0u && consumed != 0u && end_of_stream) return consumed;
+    return 0;
+}
+
+bool joc_config_idx(const std::uint8_t* frame, std::size_t frame_bytes, unsigned* out) {
+    if (out == nullptr || frame == nullptr || frame_bytes < 8u) return false;
+    std::size_t offsets[4096];
+    std::size_t count = 0;
+    marker_offsets(frame, frame_bytes, offsets, 4096, &count);
+    for (std::size_t i = 0; i < count; ++i) {
+        Container candidate;
+        if (!parse_container(frame, frame_bytes * 8u, offsets[i], &candidate)) continue;
+        if (!candidate.has(kIdOamd) || !candidate.has(kIdJoc)) continue;
+        for (std::size_t p = 0; p < candidate.payload_count; ++p) {
+            if (candidate.payloads[p].id != kIdJoc) continue;
+            // joc_dmx_config_idx is the first 3 bits of the JOC payload, followed by
+            // joc_num_objects_bits (6) and joc_ext_config_idx (3).
+            const std::size_t bit = candidate.payloads[p].bit_offset;
+            std::uint32_t value = 0;
+            for (unsigned index = 0; index < 3u; ++index) {
+                const std::size_t position = bit + index;
+                if (position / 8u >= frame_bytes) return false;
+                value = (value << 1) | ((frame[position / 8u] >> (7u - (position % 8u))) & 1u);
+            }
+            *out = value;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool frame_has_joc(const std::uint8_t* frame, std::size_t frame_bytes) {
@@ -333,12 +437,15 @@ ScanResult scan(const std::uint8_t* data, std::size_t size, std::size_t max_fram
     if (frames == 0) {
         result.joc = JocState::kUnknown;
         if (result.detail[0] == '\0') result.detail = "no syncframes";
-    } else if (with_joc == frames) {
+    } else if (with_joc != 0) {
         result.joc = JocState::kYes;
-        result.detail = "every examined syncframe carries the JOC EMDF container";
+        result.detail = (with_joc == frames)
+                            ? "every examined syncframe carries the JOC EMDF container"
+                            : "the JOC EMDF container is present in part of the examined "
+                              "audio frames (dependent substream or a late first frame)";
     } else {
         result.joc = JocState::kNo;
-        result.detail = "at least one examined syncframe has no JOC EMDF container";
+        result.detail = "no examined syncframe carries a JOC EMDF container";
     }
     return result;
 }
