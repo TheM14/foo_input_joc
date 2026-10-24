@@ -46,6 +46,7 @@ $lines = @(
     "cl $common /Fe:`"$outDir\prefs_layout_check.exe`" /Fo:`"$outDir\\`" tests\prefs_layout_check.cpp user32.lib gdi32.lib",
     "cl $common /Fe:`"$outDir\scan_crosscheck.exe`" /Fo:`"$outDir\\`" tests\scan_crosscheck.cpp src\eac3_scan.cpp `"$coreLib`" shell32.lib",
     "cl $common /Fe:`"$outDir\render_harness.exe`" /Fo:`"$outDir\\`" tests\render_harness.cpp src\joc_decode.cpp src\eac3_scan.cpp src\container_scan.cpp src\log.cpp `"$coreLib`" shell32.lib",
+    "cl $common /Fe:`"$outDir\layout_table_test.exe`" /Fo:`"$outDir\\`" tests\layout_table_test.cpp src\joc_decode.cpp src\eac3_scan.cpp src\container_scan.cpp src\log.cpp `"$coreLib`" shell32.lib",
     'if errorlevel 1 exit /b 1',
     'exit /b 0'
 )

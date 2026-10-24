@@ -60,17 +60,18 @@ void set_text(HWND control, const std::string& text) {
     SetWindowTextW(control, wide(text).c_str());
 }
 
-// Layouts are offered up to 7.1 on purpose: output chains handle eight channels
-// comfortably, and wider layouts are only meaningful when writing a file.
-struct LayoutChoice {
-    const char* name;
-    const char* label;
-};
-const LayoutChoice kLayoutChoices[] = {
-    {"2.0", "2.0 (立体声)"}, {"3.0", "3.0"},   {"3.1", "3.1"},   {"4.0", "4.0"},
-    {"5.0", "5.0"},         {"5.1", "5.1"},   {"6.1", "6.1"},   {"7.0", "7.0"},
-    {"7.1", "7.1"},
-};
+// The layouts the page offers come from the core-facing table (layout_table()), so
+// it cannot offer one the decoder rejects.  Offering them is not a promise that
+// every output can play them: foobar2000's shared and exclusive outputs follow the
+// Windows speaker configuration, while an ASIO output passes any channel count and
+// any layout through.
+//
+// The speaker configurations Windows itself has are 2.0, 5.1 and 7.1.  Anything
+// else -- a height channel, the wide pair, more than eight channels -- is not
+// carried by a shared or exclusive output, so the status line points at ASIO.
+bool windows_speaker_config(unsigned mask) {
+    return mask == 0x3u || mask == 0x3Fu || mask == 0x63Fu;
+}
 
 const char* const kModeNames[] = {"near", "far", "mid"};
 const char* const kModeLabels[] = {"near（近场）", "far（远场）", "mid（默认）"};
@@ -270,11 +271,13 @@ private:
 
         HWND layout = GetDlgItem(m_hwnd, IDC_COMBO_LAYOUT);
         SendMessageW(layout, CB_RESETCONTENT, 0, 0);
+        std::size_t layout_count = 0;
+        const joc_decode::LayoutSpec* layouts = joc_decode::layout_table(&layout_count);
         int selected = 0;
-        for (unsigned i = 0; i < sizeof(kLayoutChoices) / sizeof(kLayoutChoices[0]); ++i) {
+        for (std::size_t i = 0; i < layout_count; ++i) {
             SendMessageW(layout, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(wide(kLayoutChoices[i].label).c_str()));
-            if (values.speaker_layout == kLayoutChoices[i].name) selected = static_cast<int>(i);
+                         reinterpret_cast<LPARAM>(wide(layouts[i].name).c_str()));
+            if (values.speaker_layout == layouts[i].name) selected = static_cast<int>(i);
         }
         SendMessageW(layout, CB_SETCURSEL, selected, 0);
 
@@ -312,9 +315,10 @@ private:
 
         const int layout_index =
             static_cast<int>(SendDlgItemMessageW(m_hwnd, IDC_COMBO_LAYOUT, CB_GETCURSEL, 0, 0));
-        if (layout_index >= 0 &&
-            layout_index < static_cast<int>(sizeof(kLayoutChoices) / sizeof(kLayoutChoices[0]))) {
-            values.speaker_layout = kLayoutChoices[layout_index].name;
+        std::size_t layout_count = 0;
+        const joc_decode::LayoutSpec* layouts = joc_decode::layout_table(&layout_count);
+        if (layout_index >= 0 && static_cast<std::size_t>(layout_index) < layout_count) {
+            values.speaker_layout = layouts[layout_index].name;
         }
         const int mode_sel =
             static_cast<int>(SendDlgItemMessageW(m_hwnd, IDC_COMBO_MODE, CB_GETCURSEL, 0, 0));
@@ -350,10 +354,15 @@ private:
         const joc_settings::Values values = read_controls();
         std::string output_status;
         if (values.output != 0) {
-            char text[96] = {};
+            char text[160] = {};
             const unsigned channels = joc_decode::speaker_channels(values.speaker_layout);
-            std::snprintf(text, sizeof(text), "扬声器布局 %s（%u 声道）",
-                          values.speaker_layout.c_str(), channels);
+            joc_decode::LayoutDelivery delivery;
+            const bool plain =
+                joc_decode::layout_delivery(values.speaker_layout, &delivery) &&
+                windows_speaker_config(delivery.mask);
+            std::snprintf(text, sizeof(text), "扬声器布局 %s（%u 声道%s）",
+                          values.speaker_layout.c_str(), channels,
+                          plain ? "" : "，需要 ASIO 输出");
             output_status = text;
         }
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_OUTPUT_STATUS), output_status);

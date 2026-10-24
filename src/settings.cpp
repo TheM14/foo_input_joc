@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -115,7 +116,19 @@ Values read() {
     Values values;
     values.output = static_cast<int>(static_cast<unsigned>(g_output));
     values.speaker_layout = g_layout.get_ptr();
-    if (values.speaker_layout.empty()) values.speaker_layout = "7.1";
+    // A layout the core does not accept (an old build offered several it never
+    // accepted) would fail when the renderer is created, and the page cannot show it
+    // either, because its list is the core's own table.  Falling back here makes the
+    // stored value usable again and the page show what will actually be rendered.
+    if (joc_decode::speaker_channels(values.speaker_layout) == 0) {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true, std::memory_order_relaxed)) {
+            joc_log::line("settings: stored speaker layout \"%s\" is not one the core "
+                          "accepts; using 7.1",
+                          values.speaker_layout.c_str());
+        }
+        values.speaker_layout = "7.1";
+    }
     const unsigned source = static_cast<unsigned>(g_hrtf_source);
     values.hrtf_source = (source == 1u) ? HrtfSource::kRosella : HrtfSource::kSofa;
     values.hrtf_file = g_hrtf_file.get_ptr();

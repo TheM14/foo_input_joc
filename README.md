@@ -3,8 +3,8 @@
 [English](README.en.md) · [安装](#安装) · [设置](#设置) · [构建](#构建) · [已知限制](#已知限制)
 
 foobar2000 输入组件，播放 **E-AC-3 JOC（Dolby Atmos）** 文件：从 E-AC-3 同步帧里取出 JOC
-对象与 OAMD 元数据，与 ffmpeg 解出的核心 PCM（按 $joc\_dmx\_config\_idx$ 为 5.1 或 7 通道）配对后实时渲染，输出双耳（HRTF）或最多
-7.1 的扬声器布局。渲染内核直接编译进组件，除 `foo_input_joc.dll` 之外不需要安装任何东西。
+对象与 OAMD 元数据，与 ffmpeg 解出的核心 PCM（按 $joc\_dmx\_config\_idx$ 为 5.1 或 7 通道）配对后实时渲染，输出双耳（HRTF）或
+2.0 到 9.1.6 的扬声器布局。渲染内核直接编译进组件，除 `foo_input_joc.dll` 之外不需要安装任何东西。
 
 输入是裸流 `.eac3` / `.ec3`，或容器里的 E-AC-3 JOC 轨道（`.mp4` `.m4a` `.m4b` `.m4p`
 `.m4r` `.mov` `.mkv` `.mka` `.webm`）。文件里没有 JOC 就不接管：普通 AC-3 / E-AC-3、音频轨道
@@ -52,7 +52,7 @@ Matroska/WebM Reader** 之前。裸流 `.eac3` / `.ec3` 不受这个顺序影响
 
 Preferences → Tools → **JOC decoder**：
 
-* **Output** —— 双耳，或 2.0 到 7.1 的扬声器布局；
+* **Output** —— 双耳，或 2.0 到 9.1.6 的扬声器布局（见[扬声器布局与声道顺序](#扬声器布局与声道顺序)）；
 * **Binaural mode**（near / mid / far）与房间 **tail** 秒数；
 * **HRTF source** —— **SOFA** 文件或 **Rosella** `.personalized_headphone` 模型。路径留空表示
   用默认位置 `<组件目录>\HRTF\` 下的 `binaural.sofa` 或 `binaural.personalized_headphone`；
@@ -66,6 +66,39 @@ Preferences → Tools → **JOC decoder**：
 * **ffmpeg** 可执行文件路径。
 
 页面上的控件都不禁用，状态行会说明当前生效的是什么。
+
+### 扬声器布局与声道顺序
+
+| 布局 | 声道 | 通道掩码 | 交付顺序（声明的声道位置） |
+|---|---|---|---|
+| 2.0 | 2 | `0x3` | FL FR |
+| 3.1 | 4 | `0xF` | FL FR FC LFE |
+| 5.1 | 6 | `0x3F` | FL FR FC LFE BL BR |
+| 7.1 | 8 | `0x63F` | FL FR FC LFE BL BR SL SR |
+| 5.1.2 | 8 | `0x560F` | FL FR FC LFE SL SR TFL TFR |
+| 5.1.4 | 10 | `0x2D60F` | FL FR FC LFE SL SR TFL TFR TBL TBR |
+| 7.1.2 | 10 | `0x563F` | FL FR FC LFE BL BR SL SR TFL TFR |
+| 7.1.4 | 12 | `0x2D63F` | FL FR FC LFE BL BR SL SR TFL TFR TBL TBR |
+| 9.1.4 | 14 | `0x2D6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFR TBL TBR |
+| 9.1.6 | 16 | `0x3F6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFC TFR TBL TBC TBR |
+
+渲染内核按参考实现的顺序产生声道（9.1.4 是 L R C LFE Lrs Rrs Ls Rs Ltf Rtf Ltr Rtr Lw Rw），
+而 foobar2000 规定"帧内声道顺序 = 通道掩码中声道位的升序"。两者对 2.0 到 7.1.4 恰好一致；
+9.1.4 与 9.1.6 的宽声道排在后面，所以交付前按掩码顺序重排（日志里写 `channels permuted into
+mask order`）。上表就是这个顺序；Properties 里能看到对应的 `WAVEFORMATEXTENSIBLE_CHANNEL_MASK`，
+转换器写文件时也按同一个顺序落盘。
+
+掩码取 ffmpeg 对同名布局的定义（`5.1` 是 BL/BR，`5.1.2` 起是 SL/SR，宽声道是 FCL/FCR），这样同一
+个布局名在组件、转换产物与其它工具里含义一致。**9.1.6 的顶层中间声道对（Ltm/Rtm）在 WAVE 的 18
+个声道位里没有对应位置**（ffmpeg 用 32 位掩码之外的 TSL/TSR），因此按 TFL/TFC/TFR/TBL/TBC/TBR 中
+剩下的两个居中位置 TFC 与 TBC 交付：掩码仍然是一位声道一个位，顺序如上表，代价是这两路在
+foobar2000 的声道列表里显示为顶前排中、顶后排中。
+
+**2.0 / 5.1 / 7.1 之外的布局需要 ASIO（或接受该布局的独占输出）。** foobar2000 的共享与独占输出
+跟随 Windows 的扬声器配置，只有这几个配置；高度声道、宽声道与超过 8 声道的布局 ASIO 没有限制，声道
+按组件交付的顺序对应到设备的输出通道（用 fb2k 的 ASIO 声道映射按名称分配）。用这样的布局而输出仍
+走系统配置时，核心会把多出来的声道下混——能听到声音，但听不到那几路；转换器（Converter）不受输出
+设备限制，可以按布局写出 14/16 声道的文件。设置页的状态行在选中这类布局时会写"需要 ASIO 输出"。
 
 ### HRTF 数据
 
@@ -84,8 +117,8 @@ pwsh -File tools/package.ps1            # 两个架构，打包到 dist\*.fb2k-c
 配置固定为 `Release-Static`（静态 CRT，`/MT`）；`/fp:precise` 是逐字节验收的前提，不要改。
 `foo_input_joc.vcxproj` 通过项目引用先构建 `kernel\joc_kernel.vcxproj`；`kernel/` 里的渲染内核
 源码以 `JOC_STATIC` / `EJOC_STATIC` 编译，入口既不导入也不导出。`tests\` 是离线工具（码流
-自检与交叉核对、渲染比对、设置页布局检查、容器探测检查），`tools\` 是构建与测试床脚本。设置项
-另有 `JOC_*` 环境变量覆盖（仅用于开发运行），清单与含义在 `src\settings.cpp`。
+自检与交叉核对、渲染比对、布局表与频道顺序检查、设置页布局检查、容器探测检查），`tools\` 是构建
+与测试床脚本。设置项另有 `JOC_*` 环境变量覆盖（仅用于开发运行），清单与含义在 `src\settings.cpp`。
 
 排查问题看 DLL 旁边的 `joc_decoder.log`；组件启动时会把自己的版本、核心版本、日志路径写在
 里面。日志按**字节**封顶：单个文件写满 16 MiB 就滚到同目录的 `joc_decoder.log.1`（覆盖上一次
@@ -95,6 +128,9 @@ pwsh -File tools/package.ps1            # 两个架构，打包到 dist\*.fb2k-c
 ## 已知限制
 
 * 不实现 ADM BWF 输出。
+* 扬声器布局到 9.1.6（16 声道）为止；内核输出上限就是 16 声道，没有 22.2。2.0/5.1/7.1 之外的
+  布局需要 ASIO（或接受该布局的独占输出），见[扬声器布局与声道顺序](#扬声器布局与声道顺序)。
+* 9.1.6 的顶层中间声道对在 WAVE 的声道位里没有对应位置，按 TFC/TBC 交付（同上）。
 * $joc\_dmx\_config\_idx$ 全部五个档位都支持：取床按音频帧配对，床通道数由档位决定（0/3
   为 6 通道，1/2/4 为 8 通道），ffmpeg 只在 6 通道档位传 `-ac 6`。AC-3 核心 + 依赖子流
   （`strmtyp=1`）与"首个音频帧没有 JOC"都按正常情况处理。

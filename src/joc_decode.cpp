@@ -301,10 +301,91 @@ private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
 
-const char* const kLayouts[] = {"2.0",   "3.0",   "3.1",   "4.0",   "5.0",   "5.1",  "5.1.2",
-                                "5.1.4", "6.1",   "7.0",   "7.1",   "7.1.2", "7.1.4", "9.1.4",
-                                "9.1.6", "22.2"};
-const unsigned kLayoutChannels[] = {2, 3, 4, 4, 5, 6, 8, 10, 7, 7, 8, 10, 12, 14, 16, 24};
+// The layouts the core accepts, in the core's own channel order.  `speakers` are
+// the reference table's names for the channels the renderer emits, `flags` are the
+// WAVE speaker positions those channels are delivered as.  The two lists are per
+// channel, so a wrong entry shows up as a speaker name that does not belong to the
+// flag next to it (tests/layout_table_test.cpp checks them against the kernel).
+//
+// Where a name has two WAVE equivalents the reference table's own layout decides:
+// the surround pair of 5.1 sits behind the listener (BL/BR, which is also what
+// "5.1" means to ffmpeg), while 5.1.2 and up use the side pair (SL/SR).  The wide
+// pair of 9.1.x has one home only: FCL/FCR (ffmpeg spells the same two FLC/FRC).
+//
+// 9.1.6 is the one layout WAVE cannot describe completely: it has three height
+// pairs, and the mask has positions for two (TFL/TFR, TBL/TBR) plus single centre
+// positions.  The top-middle pair -- ffmpeg's TSL/TSR, above a 32-bit mask -- is
+// therefore delivered as the top front/back centre positions.  Every mask here has
+// exactly as many bits as the layout has channels, which is what the host and the
+// converter require; the order the channels actually arrive in is the flags' own
+// ascending order, see layout_delivery().
+const LayoutSpec kLayouts[] = {
+    {"2.0", 2, {"L", "R"}, {kSpeakerFrontLeft, kSpeakerFrontRight}},
+    {"3.1",
+     4,
+     {"L", "R", "C", "LFE"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe}},
+    {"5.1",
+     6,
+     {"L", "R", "C", "LFE", "Ls", "Rs"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerBackLeft, kSpeakerBackRight}},
+    {"7.1",
+     8,
+     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight}},
+    {"5.1.2",
+     8,
+     {"L", "R", "C", "LFE", "Ls", "Rs", "Ltm", "Rtm"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerSideLeft, kSpeakerSideRight, kSpeakerTopFrontLeft, kSpeakerTopFrontRight}},
+    {"5.1.4",
+     10,
+     {"L", "R", "C", "LFE", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerSideLeft, kSpeakerSideRight, kSpeakerTopFrontLeft, kSpeakerTopFrontRight,
+      kSpeakerTopBackLeft, kSpeakerTopBackRight}},
+    {"7.1.2",
+     10,
+     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltm", "Rtm"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
+      kSpeakerTopFrontLeft, kSpeakerTopFrontRight}},
+    {"7.1.4",
+     12,
+     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
+      kSpeakerTopFrontLeft, kSpeakerTopFrontRight, kSpeakerTopBackLeft,
+      kSpeakerTopBackRight}},
+    {"9.1.4",
+     14,
+     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr", "Lw",
+      "Rw"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
+      kSpeakerTopFrontLeft, kSpeakerTopFrontRight, kSpeakerTopBackLeft,
+      kSpeakerTopBackRight, kSpeakerFrontCenterLeft, kSpeakerFrontCenterRight}},
+    {"9.1.6",
+     16,
+     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr", "Ltm",
+      "Rtm", "Lw", "Rw"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
+      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
+      kSpeakerTopFrontLeft, kSpeakerTopFrontRight, kSpeakerTopBackLeft,
+      kSpeakerTopBackRight, kSpeakerTopFrontCenter, kSpeakerTopBackCenter,
+      kSpeakerFrontCenterLeft, kSpeakerFrontCenterRight}},
+};
+
+constexpr std::size_t kLayoutCount = sizeof(kLayouts) / sizeof(kLayouts[0]);
+
+const LayoutSpec* find_layout(const std::string& name) {
+    for (std::size_t i = 0; i < kLayoutCount; ++i) {
+        if (name == kLayouts[i].name) return &kLayouts[i];
+    }
+    return nullptr;
+}
 
 // Every ffmpeg child writes its diagnostics next to the component rather than into
 // whatever working directory the host process happens to have; separate files so
@@ -343,16 +424,54 @@ std::int64_t sample_of_seconds(double seconds) {
 
 }  // namespace
 
-const char* const* speaker_layouts(std::size_t* count) {
-    if (count != nullptr) *count = sizeof(kLayouts) / sizeof(kLayouts[0]);
+const LayoutSpec* layout_table(std::size_t* count) {
+    if (count != nullptr) *count = kLayoutCount;
     return kLayouts;
 }
 
 unsigned speaker_channels(const std::string& layout) {
-    for (std::size_t i = 0; i < sizeof(kLayouts) / sizeof(kLayouts[0]); ++i) {
-        if (layout == kLayouts[i]) return kLayoutChannels[i];
+    const LayoutSpec* spec = find_layout(layout);
+    return spec != nullptr ? spec->channels : 0;
+}
+
+bool layout_delivery(const std::string& layout, LayoutDelivery* out) {
+    const LayoutSpec* spec = find_layout(layout);
+    if (spec == nullptr || out == nullptr || spec->channels == 0 ||
+        spec->channels > kMaxLayoutChannels) {
+        return false;
     }
-    return 0;
+    LayoutDelivery delivery;
+    delivery.channels = spec->channels;
+    bool taken[kMaxLayoutChannels] = {};
+    for (unsigned channel = 0; channel < delivery.channels; ++channel) {
+        delivery.mask |= spec->flags[channel];
+        // The host reads the channels in the ascending order of their flags, so
+        // the channel delivered at position i is the i-th smallest flag.
+        unsigned best = delivery.channels;
+        for (unsigned candidate = 0; candidate < delivery.channels; ++candidate) {
+            if (taken[candidate]) continue;
+            if (best == delivery.channels || spec->flags[candidate] < spec->flags[best]) {
+                best = candidate;
+            }
+        }
+        delivery.order[channel] = best;
+        taken[best] = true;
+        if (best != channel) delivery.reordered = true;
+    }
+    *out = delivery;
+    return true;
+}
+
+void apply_delivery_order(const LayoutDelivery& delivery, const float* source,
+                          std::size_t frames, float* target) {
+    const std::size_t channels = delivery.channels;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        const float* in = source + frame * channels;
+        float* out = target + frame * channels;
+        for (std::size_t channel = 0; channel < channels; ++channel) {
+            out[channel] = in[delivery.order[channel]];
+        }
+    }
 }
 
 namespace {

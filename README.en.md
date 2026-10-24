@@ -5,7 +5,7 @@
 A foobar2000 input component for **E-AC-3 JOC (Dolby Atmos)** files: the JOC object and OAMD
 metadata is taken from the E-AC-3 syncframes and paired with the core PCM that ffmpeg decodes
 (5.1 or 7 channels, following $joc\_dmx\_config\_idx$), then rendered in real time to headphones
-(HRTF) or to a speaker layout up to 7.1. The
+(HRTF) or to a speaker layout from 2.0 up to 9.1.6. The
 rendering core is compiled into the component, so there is nothing to install beside
 `foo_input_joc.dll`.
 
@@ -59,7 +59,8 @@ Matroska/WebM Reader** in that list. Bare `.eac3` / `.ec3` files do not depend o
 
 Preferences → Tools → **JOC decoder**:
 
-* **Output** — binaural, or a speaker layout from 2.0 to 7.1;
+* **Output** — binaural, or a speaker layout from 2.0 to 9.1.6 (see
+  [Speaker layouts and channel order](#speaker-layouts-and-channel-order));
 * **Binaural mode** (near / mid / far) and the room **tail** in seconds;
 * **HRTF source** — a **SOFA** file or a **Rosella** `.personalized_headphone` model. An empty
   path means the default location, `<component directory>\HRTF\binaural.sofa` or
@@ -78,6 +79,45 @@ Preferences → Tools → **JOC decoder**:
 * the **ffmpeg** executable to use.
 
 No control on the page is disabled, and the status line states what is in effect.
+
+### Speaker layouts and channel order
+
+| Layout | Channels | Channel mask | Delivered order (declared speaker positions) |
+|---|---|---|---|
+| 2.0 | 2 | `0x3` | FL FR |
+| 3.1 | 4 | `0xF` | FL FR FC LFE |
+| 5.1 | 6 | `0x3F` | FL FR FC LFE BL BR |
+| 7.1 | 8 | `0x63F` | FL FR FC LFE BL BR SL SR |
+| 5.1.2 | 8 | `0x560F` | FL FR FC LFE SL SR TFL TFR |
+| 5.1.4 | 10 | `0x2D60F` | FL FR FC LFE SL SR TFL TFR TBL TBR |
+| 7.1.2 | 10 | `0x563F` | FL FR FC LFE BL BR SL SR TFL TFR |
+| 7.1.4 | 12 | `0x2D63F` | FL FR FC LFE BL BR SL SR TFL TFR TBL TBR |
+| 9.1.4 | 14 | `0x2D6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFR TBL TBR |
+| 9.1.6 | 16 | `0x3F6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFC TFR TBL TBC TBR |
+
+The renderer emits the reference implementation's channel order (for 9.1.4: L R C LFE Lrs Rrs Ls Rs
+Ltf Rtf Ltr Rtr Lw Rw), while foobar2000 defines the interleaved order as the ascending order of the
+channel mask's speaker bits. The two agree for 2.0 through 7.1.4; 9.1.4 and 9.1.6 carry the wide
+pair last, so the channels are permuted into mask order before delivery (the log says `channels
+permuted into mask order`). The table above is that order; Properties shows the matching
+`WAVEFORMATEXTENSIBLE_CHANNEL_MASK`, and the Converter writes files in the same order.
+
+The mask follows ffmpeg's definition of the same layout name (`5.1` is BL/BR, `5.1.2` and up are
+SL/SR, the wide pair is FCL/FCR), so a layout name means the same thing in the component, in a
+converted file and in other tools. **9.1.6's top-middle pair (Ltm/Rtm) has no WAVE position** — ffmpeg
+places it at TSL/TSR, beyond a 32-bit mask — so it is delivered at the two centre positions the mask
+has left, TFC and TBC: the mask still has exactly one bit per channel and the order is the one in the
+table, at the cost of those two channels being labelled top front centre / top back centre in
+foobar2000's channel lists.
+
+**Layouts other than 2.0 / 5.1 / 7.1 need ASIO (or an exclusive output that accepts the
+layout).** foobar2000's shared and exclusive outputs follow the Windows speaker configuration, of
+which those are the only multichannel ones; ASIO has no such limit and maps the channels in the
+order the component delivers them (assign them by name in fb2k's ASIO channel mapping). With such a
+layout on a system-configured output the core downmixes the extra channels — audible, but those
+channels are not heard; the Converter is not bound by the output device and writes 14- or
+16-channel files as configured. The preferences status line says "needs ASIO output" when such a
+layout is selected.
 
 ### HRTF data
 
@@ -99,9 +139,10 @@ byte-for-byte acceptance rests on, so it must not be changed. `foo_input_joc.vcx
 `kernel\joc_kernel.vcxproj` first through a project reference; the rendering core sources in
 `kernel/` are compiled with `JOC_STATIC` / `EJOC_STATIC`, so their entry points are neither
 imported nor exported. `tests\` holds the offline tools (bitstream self-test and cross-check,
-render comparison, preferences-page layout check, container-probe check) and `tools\` the build
-and test-bed scripts. Settings also read `JOC_*` environment overrides for one run (development
-only); the list and what each one does is in `src\settings.cpp`.
+render comparison, speaker-layout table and channel-order check, preferences-page layout check,
+container-probe check) and `tools\` the build and test-bed scripts. Settings also read `JOC_*`
+environment overrides for one run (development only); the list and what each one does is in
+`src\settings.cpp`.
 
 To diagnose a problem, read `joc_decoder.log` beside the DLL: the component writes its own
 version, the core version and the log path there at start-up. The log is capped by **bytes**: a
@@ -113,6 +154,10 @@ every container in the library, which is where the volume comes from.
 ## Known limitations
 
 * ADM BWF output is not implemented.
+* Speaker layouts go up to 9.1.6 (16 channels), which is the renderer's own limit — there is no
+  22.2. Layouts other than 2.0 / 5.1 / 7.1 need ASIO (or an exclusive output that accepts the
+  layout); see [Speaker layouts and channel order](#speaker-layouts-and-channel-order).
+* 9.1.6's top-middle pair has no WAVE channel position and is delivered at TFC/TBC (same section).
 * All five $joc\_dmx\_config\_idx$ configurations are supported: the bed is paired per audio
   frame, and its channel count follows the configuration (6 channels for 0/3, 8 for 1/2/4), with
   `-ac 6` passed to ffmpeg only for the 6-channel ones. An AC-3 core plus a dependent substream
