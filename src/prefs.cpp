@@ -4,6 +4,11 @@
 // plain Win32 modeless dialog.  The SDK's preferences_page_impl<> helper would
 // pull in the ATL/WTL dialog framework, which the SDK does not ship; nothing in
 // this page needs it.
+//
+// Every visible string comes from src/lang.cpp: the dialog resource carries the
+// Chinese text as the design-time default, and the page replaces all of it once it
+// knows which language is selected, so changing the language combo takes effect
+// without reopening the page.
 
 #include <SDK/foobar2000-lite.h>
 
@@ -16,8 +21,10 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "joc_decode.h"
+#include "lang.h"
 #include "prefs.h"
 #include "log.h"
 #include "resource.h"
@@ -60,41 +67,87 @@ void set_text(HWND control, const std::string& text) {
     SetWindowTextW(control, wide(text).c_str());
 }
 
-// The layouts the page offers come from the core-facing table (layout_table()), so
-// it cannot offer one the decoder rejects.  Offering them is not a promise that
-// every output can play them: foobar2000's shared and exclusive outputs follow the
-// Windows speaker configuration, while an ASIO output passes any channel count and
-// any layout through.
-//
 // The speaker configurations Windows itself has are 2.0, 5.1 and 7.1.  Anything
-// else -- a height channel, the wide pair, more than eight channels -- is not
+// else -- a height channel, either 4.0 layout, more than eight channels -- is not
 // carried by a shared or exclusive output, so the status line points at ASIO.
 bool windows_speaker_config(unsigned mask) {
     return mask == 0x3u || mask == 0x3Fu || mask == 0x63Fu;
 }
 
-const char* const kModeNames[] = {"near", "far", "mid"};
-const char* const kModeLabels[] = {"near（近场）", "far（远场）", "mid（默认）"};
+// A drop-down list's items are rebuilt whenever the language changes, and the
+// selection has to survive that.
+void fill_combo(HWND combo, const std::vector<std::string>& items, int selected) {
+    const int current =
+        selected >= 0 ? selected
+                      : static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    for (const std::string& item : items) {
+        SendMessageW(combo, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(wide(item).c_str()));
+    }
+    if (current >= 0 && current < static_cast<int>(items.size())) {
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(current), 0);
+    }
+}
+
+// The binaural mode combo lists the three modes in the order they widen, with the
+// default (mid) in the middle.
+joc_lang::Text mode_text(unsigned index) {
+    switch (index) {
+        case 0: return joc_lang::Text::kComboModeNear;
+        case 2: return joc_lang::Text::kComboModeFar;
+        default: return joc_lang::Text::kComboModeMid;
+    }
+}
 
 unsigned mode_index(unsigned mode) {
     switch (mode) {
         case 1: return 0;
-        case 2: return 1;
-        default: return 2;
+        case 2: return 2;
+        default: return 1;
     }
 }
 
 unsigned mode_value(unsigned index) {
     switch (index) {
         case 0: return 1;
-        case 1: return 2;
+        case 2: return 2;
         default: return 3;
     }
 }
 
+int language_index(joc_lang::Language language) {
+    switch (language) {
+        case joc_lang::Language::kChineseSimplified: return 1;
+        case joc_lang::Language::kEnglish: return 2;
+        default: return 0;
+    }
+}
+
+joc_lang::Language language_value(int index) {
+    switch (index) {
+        case 1: return joc_lang::Language::kChineseSimplified;
+        case 2: return joc_lang::Language::kEnglish;
+        default: return joc_lang::Language::kSystem;
+    }
+}
+
+std::vector<std::string> mode_items(joc_lang::Language language) {
+    std::vector<std::string> items;
+    for (unsigned i = 0; i < 3; ++i) {
+        items.emplace_back(joc_lang::get(language, mode_text(i)));
+    }
+    return items;
+}
+
+std::vector<std::string> language_items(joc_lang::Language language) {
+    return {joc_lang::get(language, joc_lang::Text::kLanguageSystem),
+            joc_lang::get(language, joc_lang::Text::kLanguageChinese),
+            joc_lang::get(language, joc_lang::Text::kLanguageEnglish)};
+}
+
 bool pick_file(HWND owner, std::string& path, const wchar_t* title,
-               const wchar_t* filter) {
-    wchar_t buffer[4096] = {};
+               const wchar_t* filter) {    wchar_t buffer[4096] = {};
     const std::wstring current = wide(path);
     if (!current.empty() && current.size() < 4090) {
         std::wcsncpy(buffer, current.c_str(), 4090);
@@ -110,6 +163,42 @@ bool pick_file(HWND owner, std::string& path, const wchar_t* title,
     if (GetOpenFileNameW(&dialog) == FALSE) return false;
     path = narrow(buffer);
     return true;
+}
+
+// Shortens a path to the width a control has, keeping its start and the file name
+// and cutting out the middle.  The status line under the group is two lines tall,
+// and a long user-components path would otherwise push the file name out of view.
+std::string elide_path(HWND control, const std::string& path, int max_width) {
+    HDC dc = GetDC(control);
+    if (dc == nullptr) return path;
+    const auto font = reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0));
+    HGDIOBJ previous = font != nullptr ? SelectObject(dc, font) : nullptr;
+    auto fits = [&](const std::wstring& text) {
+        SIZE size{};
+        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+        return size.cx <= max_width;
+    };
+
+    const std::wstring wide_path = wide(path);
+    std::string result = path;
+    if (!fits(wide_path)) {
+        const std::size_t slash = wide_path.find_last_of(L"\\/");
+        const std::wstring tail = slash == std::wstring::npos ? wide_path
+                                                             : wide_path.substr(slash);
+        const std::wstring head = slash == std::wstring::npos ? std::wstring()
+                                                             : wide_path.substr(0, slash);
+        result = narrow(tail);
+        for (std::size_t keep = head.size(); keep > 0; --keep) {
+            const std::wstring candidate = head.substr(0, keep) + L"…" + tail;
+            if (fits(candidate)) {
+                result = narrow(candidate);
+                break;
+            }
+        }
+    }
+    if (previous != nullptr) SelectObject(dc, previous);
+    ReleaseDC(control, dc);
+    return result;
 }
 
 class prefs_instance : public preferences_page_instance {
@@ -143,12 +232,12 @@ public:
         joc_settings::write(values);
         m_initial = values;
         joc_log::line("prefs: applied %s", joc_settings::describe(values).c_str());
-        update_status();
+        apply_texts();
         notify();
     }
 
     void reset() override {
-        load_controls(joc_settings::defaults());
+        load_values(joc_settings::defaults());
         joc_log::line("prefs: reset to defaults");
         notify();
     }
@@ -170,9 +259,8 @@ private:
     INT_PTR handle(UINT message, WPARAM wparam, LPARAM lparam) {
         switch (message) {
             case WM_INITDIALOG:
-                load_controls(joc_settings::read());
+                load_values(joc_settings::read());
                 apply_dark_mode();
-                update_status();
                 return TRUE;
             case WM_COMMAND: {
                 const int id = LOWORD(wparam);
@@ -196,7 +284,6 @@ private:
                     return TRUE;
                 }
                 if (id == IDC_RADIO_HRTF_SOFA || id == IDC_RADIO_HRTF_ROSELLA) {
-                    update_enabled_state();
                     update_status();
                     notify();
                     return TRUE;
@@ -211,18 +298,29 @@ private:
                     return TRUE;
                 }
                 if (id == IDC_RADIO_BINAURAL || id == IDC_RADIO_SPEAKER) {
-                    update_enabled_state();
+                    update_status();
                     notify();
                     return TRUE;
                 }
                 if (id == IDC_CHECK_GAIN || id == IDC_CHECK_INT24) {
-                    update_enabled_state();
+                    update_status();
                     notify();
                     return TRUE;
                 }
-                if (code == EN_CHANGE || code == CBN_SELCHANGE) {
-                    if (id == IDC_EDIT_HRTF || id == IDC_COMBO_LAYOUT ||
-                        id == IDC_EDIT_GAIN) {
+                if (code == CBN_SELCHANGE) {
+                    if (id == IDC_COMBO_LANGUAGE) {
+                        // The language applies to the page itself, so every text is
+                        // replaced at once.  The value is stored when the page is
+                        // applied, like the other controls.
+                        apply_texts();
+                    } else if (id == IDC_COMBO_LAYOUT || id == IDC_COMBO_MODE) {
+                        update_status();
+                    }
+                    notify();
+                    return TRUE;
+                }
+                if (code == EN_CHANGE) {
+                    if (id == IDC_EDIT_HRTF || id == IDC_EDIT_GAIN) {
                         update_status();
                     }
                     notify();
@@ -265,34 +363,59 @@ private:
         return FALSE;
     }
 
-    void load_controls(const joc_settings::Values& values) {
+    // ---- language ---------------------------------------------------------
+
+    joc_lang::Language selected_language() const {
+        const int index = static_cast<int>(
+            SendDlgItemMessageW(m_hwnd, IDC_COMBO_LANGUAGE, CB_GETCURSEL, 0, 0));
+        return language_value(index);
+    }
+
+    // Replaces every visible string with the one for the language the combo has
+    // selected.  Safe to call before the combos have items: their lists are
+    // (re)built here from the same language, keeping the current selection.
+    void apply_texts() {
+        const joc_lang::Language language = joc_lang::resolve(selected_language());
+        auto label = [&](int control, joc_lang::Text text) {
+            set_text(GetDlgItem(m_hwnd, control), joc_lang::get(language, text));
+        };
+        label(IDC_GROUP_OUTPUT, joc_lang::Text::kGroupOutput);
+        label(IDC_RADIO_BINAURAL, joc_lang::Text::kRadioBinaural);
+        label(IDC_RADIO_SPEAKER, joc_lang::Text::kRadioSpeaker);
+        label(IDC_LABEL_MODE, joc_lang::Text::kLabelMode);
+        label(IDC_LABEL_TAIL, joc_lang::Text::kLabelTail);
+        label(IDC_CHECK_INT24, joc_lang::Text::kCheckInt24);
+        label(IDC_LABEL_INT24_HINT, joc_lang::Text::kInt24Hint);
+        label(IDC_GROUP_HRTF, joc_lang::Text::kGroupHrtf);
+        label(IDC_RADIO_HRTF_SOFA, joc_lang::Text::kRadioSofa);
+        label(IDC_RADIO_HRTF_ROSELLA, joc_lang::Text::kRadioRosella);
+        label(IDC_LABEL_HRTF, joc_lang::Text::kLabelHrtfFile);
+        label(IDC_BROWSE_HRTF, joc_lang::Text::kButtonBrowse);
+        label(IDC_LABEL_HRTF_HINT, joc_lang::Text::kHrtfHint);
+        label(IDC_GROUP_GAIN, joc_lang::Text::kGroupGain);
+        label(IDC_CHECK_GAIN, joc_lang::Text::kCheckGain);
+        label(IDC_LABEL_GAIN, joc_lang::Text::kLabelGainUnit);
+        label(IDC_LABEL_GAIN_HINT, joc_lang::Text::kGainHint);
+        label(IDC_GROUP_MISC, joc_lang::Text::kGroupOther);
+        label(IDC_LABEL_LANGUAGE, joc_lang::Text::kLabelLanguage);
+        label(IDC_LABEL_FFMPEG, joc_lang::Text::kLabelFfmpeg);
+        label(IDC_BROWSE_FFMPEG, joc_lang::Text::kButtonBrowse);
+
+        fill_combo(GetDlgItem(m_hwnd, IDC_COMBO_MODE), mode_items(language), -1);
+        fill_combo(GetDlgItem(m_hwnd, IDC_COMBO_LANGUAGE), language_items(language), -1);
+        update_status();
+    }
+
+    // ---- control values ---------------------------------------------------
+
+    void load_values(const joc_settings::Values& values) {
         CheckRadioButton(m_hwnd, IDC_RADIO_BINAURAL, IDC_RADIO_SPEAKER,
                          values.output == 0 ? IDC_RADIO_BINAURAL : IDC_RADIO_SPEAKER);
-
-        HWND layout = GetDlgItem(m_hwnd, IDC_COMBO_LAYOUT);
-        SendMessageW(layout, CB_RESETCONTENT, 0, 0);
-        std::size_t layout_count = 0;
-        const joc_decode::LayoutSpec* layouts = joc_decode::layout_table(&layout_count);
-        int selected = 0;
-        for (std::size_t i = 0; i < layout_count; ++i) {
-            SendMessageW(layout, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(wide(layouts[i].name).c_str()));
-            if (values.speaker_layout == layouts[i].name) selected = static_cast<int>(i);
-        }
-        SendMessageW(layout, CB_SETCURSEL, selected, 0);
-
-        HWND mode = GetDlgItem(m_hwnd, IDC_COMBO_MODE);
-        SendMessageW(mode, CB_RESETCONTENT, 0, 0);
-        for (unsigned i = 0; i < 3; ++i) {
-            SendMessageW(mode, CB_ADDSTRING, 0,
-                         reinterpret_cast<LPARAM>(wide(kModeLabels[i]).c_str()));
-        }
-        SendMessageW(mode, CB_SETCURSEL, mode_index(values.binaural_mode), 0);
-
         CheckRadioButton(m_hwnd, IDC_RADIO_HRTF_SOFA, IDC_RADIO_HRTF_ROSELLA,
                          values.hrtf_source == joc_settings::HrtfSource::kRosella
                              ? IDC_RADIO_HRTF_ROSELLA
                              : IDC_RADIO_HRTF_SOFA);
+
         set_text(GetDlgItem(m_hwnd, IDC_EDIT_HRTF), values.hrtf_file);
         set_text(GetDlgItem(m_hwnd, IDC_EDIT_FFMPEG), values.ffmpeg_path);
 
@@ -306,7 +429,33 @@ private:
                      values.gain_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_INT24), BM_SETCHECK,
                      values.force_int24 ? BST_CHECKED : BST_UNCHECKED, 0);
-        update_enabled_state();
+
+        // The item lists are language-dependent, so they are built (in the stored
+        // language) before the selections are restored, and the texts are applied
+        // last: apply_texts() reads the language from the combo, so a selection set
+        // afterwards would leave the page in the other language.
+        const joc_lang::Language language = joc_lang::resolve(values.language);
+        fill_combo(GetDlgItem(m_hwnd, IDC_COMBO_LANGUAGE),
+                   language_items(language), language_index(values.language));
+        fill_combo(GetDlgItem(m_hwnd, IDC_COMBO_MODE), mode_items(language),
+                   static_cast<int>(mode_index(values.binaural_mode)));
+
+        std::size_t layout_count = 0;
+        const joc_decode::LayoutSpec* layouts = joc_decode::layout_table(&layout_count);
+        std::vector<std::string> names;
+        int layout_index = 0;
+        for (std::size_t i = 0; i < layout_count; ++i) {
+            names.emplace_back(layouts[i].name);
+            if (values.speaker_layout == layouts[i].name) {
+                layout_index = static_cast<int>(i);
+            }
+        }
+        // The list comes from the core-facing table, so the page cannot offer a
+        // layout the decoder rejects.  Offering one is not a promise that an output
+        // can play it: shared and exclusive outputs follow the Windows speaker
+        // configuration, ASIO passes any channel count through.
+        fill_combo(GetDlgItem(m_hwnd, IDC_COMBO_LAYOUT), names, layout_index);
+        apply_texts();
     }
 
     joc_settings::Values read_controls() const {
@@ -322,7 +471,7 @@ private:
         }
         const int mode_sel =
             static_cast<int>(SendDlgItemMessageW(m_hwnd, IDC_COMBO_MODE, CB_GETCURSEL, 0, 0));
-        values.binaural_mode = mode_value(mode_sel < 0 ? 2u : static_cast<unsigned>(mode_sel));
+        values.binaural_mode = mode_value(mode_sel < 0 ? 1u : static_cast<unsigned>(mode_sel));
 
         values.hrtf_source = IsDlgButtonChecked(m_hwnd, IDC_RADIO_HRTF_ROSELLA) == BST_CHECKED
                                  ? joc_settings::HrtfSource::kRosella
@@ -336,6 +485,7 @@ private:
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_GAIN) == BST_CHECKED;
         values.force_int24 =
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_INT24) == BST_CHECKED;
+        values.language = selected_language();
         // Advanced values are not on this page; keep whatever is stored.
         const joc_settings::Values stored = joc_settings::read();
         values.object_delay_samples = stored.object_delay_samples;
@@ -343,60 +493,60 @@ private:
         return values;
     }
 
-    // Nothing on this page is ever disabled: a greyed control reads as an option
-    // that cannot be used, and none of these settings is invalid in the other
-    // mode.  A speaker layout chosen while binaural output is active simply has no
-    // effect until the output is switched back, and the gain field describes what
-    // the switch would apply.  What is in effect is stated in the status line.
-    void update_enabled_state() { update_status(); }
-
+    // Updates the lines that describe what is in effect.  Nothing on this page is
+    // disabled: a speaker layout chosen while binaural output is active simply has
+    // no effect until the output is switched back, and the status line says which
+    // layout and how many channels that would be.
     void update_status() {
+        const joc_lang::Language language = joc_lang::resolve(selected_language());
         const joc_settings::Values values = read_controls();
+
         std::string output_status;
         if (values.output != 0) {
-            char text[160] = {};
+            char text[192] = {};
             const unsigned channels = joc_decode::speaker_channels(values.speaker_layout);
             joc_decode::LayoutDelivery delivery;
             const bool plain =
                 joc_decode::layout_delivery(values.speaker_layout, &delivery) &&
                 windows_speaker_config(delivery.mask);
-            std::snprintf(text, sizeof(text), "扬声器布局 %s（%u 声道%s）",
-                          values.speaker_layout.c_str(), channels,
-                          plain ? "" : "，需要 ASIO 输出");
+            std::snprintf(
+                text, sizeof(text),
+                joc_lang::get(language, joc_lang::Text::kSpeakerStatus),
+                values.speaker_layout.c_str(), channels,
+                plain ? "" : joc_lang::get(language, joc_lang::Text::kSpeakerStatusAsio));
             output_status = text;
         }
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_OUTPUT_STATUS), output_status);
 
-        // The hint says what the switch does and what the other state means: the
-        // renderer is float32 either way, so "24bit" is about the delivery, and
-        // that is not something a checkbox label can carry on its own.  The second
-        // half matters because this switch changes what the component *reports*
-        // about a file, and foobar2000 caches that per file: an item whose
-        // information was read before the switch was flipped keeps the old format
-        // until it is reloaded.
-        set_text(GetDlgItem(m_hwnd, IDC_LABEL_INT24_HINT),
-                 values.force_int24
-                     ? "开启：量化到 int24，超出 ±1 截断；切换后需刷新文件信息"
-                     : "关闭：按 32 位浮点交付（默认）");
-
         joc_decode::Settings effective = joc_settings::current();
-        effective.hrtf_source =
-            static_cast<joc_decode::HrtfSource>(values.hrtf_source);
+        effective.hrtf_source = static_cast<joc_decode::HrtfSource>(values.hrtf_source);
         effective.hrtf_file = values.hrtf_file;
         const std::string file = joc_decode::resolve_hrtf_file(effective);
-        std::string hrtf_status =
-            std::string(joc_settings::hrtf_source_name(values.hrtf_source)) + "：";
-        if (values.hrtf_file.empty()) hrtf_status += "默认";
-        hrtf_status += "\n" +
-                       (file.empty() ? std::string("无法确定默认路径") : file);
+        const joc_lang::Text source = values.hrtf_source == joc_settings::HrtfSource::kRosella
+                                          ? joc_lang::Text::kHrtfSourceRosella
+                                          : joc_lang::Text::kHrtfSourceSofa;
+        std::string hrtf_status = joc_lang::get(language, source);
+        hrtf_status += joc_lang::get(language, joc_lang::Text::kSeparator);
+        if (values.hrtf_file.empty()) {
+            hrtf_status += joc_lang::get(language, joc_lang::Text::kHrtfDefault);
+        }
+        hrtf_status += "\n";
+        if (file.empty()) {
+            hrtf_status += joc_lang::get(language, joc_lang::Text::kHrtfDefaultUnknown);
+        } else {
+            RECT status_rect{};
+            GetClientRect(GetDlgItem(m_hwnd, IDC_LABEL_STATUS), &status_rect);
+            hrtf_status += elide_path(GetDlgItem(m_hwnd, IDC_LABEL_STATUS), file,
+                                      status_rect.right - 4);
+        }
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_STATUS), hrtf_status);
 
         char gain[96] = {};
-        if (values.gain_enabled) {
-            std::snprintf(gain, sizeof(gain), "增益开 %.2f dB", values.gain_db);
-        } else {
-            std::snprintf(gain, sizeof(gain), "增益关（输出不衰减）");
-        }
+        std::snprintf(
+            gain, sizeof(gain),
+            joc_lang::get(language, values.gain_enabled ? joc_lang::Text::kGainStatusOn
+                                                        : joc_lang::Text::kGainStatusOff),
+            values.gain_db);
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_GAIN_STATUS), gain);
     }
 
@@ -412,6 +562,7 @@ private:
         if (now.gain_db != m_initial.gain_db) return true;
         if (now.tail_seconds != m_initial.tail_seconds) return true;
         if (now.ffmpeg_path != m_initial.ffmpeg_path) return true;
+        if (now.language != m_initial.language) return true;
         return false;
     }
 
@@ -459,12 +610,19 @@ private:
 
 class prefs_page : public preferences_page_v3 {
 public:
-    const char* get_name() override { return "JOC 解码器"; }
+    // The page name follows the language setting; foobar2000 asks for it when it
+    // builds the tree, so a change shows up the next time the page is opened.
+    const char* get_name() override {
+        static std::string name;
+        name = joc_lang::get(joc_lang::resolve(joc_settings::read().language),
+                             joc_lang::Text::kPageName);
+        return name.c_str();
+    }
     GUID get_guid() override { return kPrefsGuid; }
     GUID get_parent_guid() override { return preferences_page::guid_tools; }
 
     preferences_page_instance::ptr instantiate(HWND parent,
-                                              preferences_page_callback::ptr callback) override {
+                                               preferences_page_callback::ptr callback) override {
         return fb2k::service_new<prefs_instance>(parent, callback);
     }
 };

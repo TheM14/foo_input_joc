@@ -33,6 +33,7 @@ constexpr GUID kGuidForceInt24 = {0xd2c67f41, 0x8b53, 0x4a2e, {0x97, 0x61, 0x0f,
 constexpr GUID kGuidObjectDelay = {0x5b2e9c18, 0xa640, 0x4d7b, {0x92, 0x0e, 0x37, 0xc5, 0x81, 0x6b, 0x2a, 0x54}};
 constexpr GUID kGuidThreads = {0xcb7a4015, 0x3f98, 0x4c62, {0xa0, 0x8d, 0x1b, 0x74, 0x29, 0xe6, 0x53, 0x0f}};
 constexpr GUID kGuidFfmpeg = {0x0e9d37c2, 0x5a18, 0x4b40, {0xb6, 0x3f, 0x88, 0x2d, 0x9a, 0x70, 0x1c, 0x65}};
+constexpr GUID kGuidLanguage = {0x58e17a04, 0x3d92, 0x4f6b, {0xa1, 0x27, 0x94, 0xc8, 0x0b, 0x6d, 0x53, 0xe1}};
 
 cfg_uint g_output(kGuidOutput, 0);
 cfg_string g_layout(kGuidLayout, "7.1");
@@ -50,6 +51,8 @@ cfg_bool g_force_int24(kGuidForceInt24, false);
 cfg_uint g_object_delay(kGuidObjectDelay, 1473);
 cfg_uint g_threads(kGuidThreads, 0);
 cfg_string g_ffmpeg(kGuidFfmpeg, "ffmpeg");
+// 0 = follow the Windows user-interface language, 1 = Chinese, 2 = English.
+cfg_uint g_language(kGuidLanguage, 0);
 
 // Appends an optional trailing field to one of the fixed describe() buffers, so a
 // setting that is off leaves the line exactly as it was.
@@ -112,10 +115,21 @@ const char* hrtf_default_file_name(HrtfSource source) {
 
 Values defaults() { return Values(); }
 
+namespace {
+
+// The layout name the decoder should use for a stored or overridden value: "4.0"
+// is the spelling older configurations use for the layout the table calls 4.0
+// Surround, so every caller sees one of the names in the layout table.
+std::string canonical_layout(const std::string& layout) {
+    return (layout == "4.0") ? std::string("4.0 Surround") : layout;
+}
+
+}  // namespace
+
 Values read() {
     Values values;
     values.output = static_cast<int>(static_cast<unsigned>(g_output));
-    values.speaker_layout = g_layout.get_ptr();
+    values.speaker_layout = canonical_layout(g_layout.get_ptr());
     // A layout the core does not accept (an old build offered several it never
     // accepted) would fail when the renderer is created, and the page cannot show it
     // either, because its list is the core's own table.  Falling back here makes the
@@ -141,6 +155,19 @@ Values read() {
     values.native_threads = static_cast<unsigned>(g_threads);
     values.ffmpeg_path = g_ffmpeg.get_ptr();
     if (values.ffmpeg_path.empty()) values.ffmpeg_path = "ffmpeg";
+    const unsigned language = static_cast<unsigned>(g_language);
+    values.language = language <= 2u ? static_cast<joc_lang::Language>(language)
+                                     : joc_lang::Language::kSystem;
+    // The page and the messages both read this far, so the development override
+    // lives here rather than in current(), where only the decoder would see it.
+    std::string text;
+    if (env_string("JOC_LANGUAGE", &text)) {
+        values.language = (text == "en" || text == "english")
+                              ? joc_lang::Language::kEnglish
+                              : (text == "zh" || text == "chinese")
+                                    ? joc_lang::Language::kChineseSimplified
+                                    : joc_lang::Language::kSystem;
+    }
     return values;
 }
 
@@ -157,6 +184,7 @@ void write(const Values& values) {
     g_object_delay = values.object_delay_samples;
     g_threads = values.native_threads;
     g_ffmpeg = values.ffmpeg_path.c_str();
+    g_language = static_cast<unsigned>(values.language);
 }
 
 joc_decode::Settings current() {
@@ -164,7 +192,7 @@ joc_decode::Settings current() {
 
     std::string text;
     if (env_string("JOC_OUTPUT", &text)) values.output = (text == "speaker") ? 1 : 0;
-    (void)env_string("JOC_LAYOUT", &values.speaker_layout);
+    if (env_string("JOC_LAYOUT", &text)) values.speaker_layout = canonical_layout(text);
     (void)env_string("JOC_HRTF", &values.hrtf_file);
     if (env_string("JOC_HRTF_SOURCE", &text)) {
         values.hrtf_source = (text == "rosella") ? HrtfSource::kRosella : HrtfSource::kSofa;
@@ -236,6 +264,11 @@ std::string describe(const Values& values) {
                   values.tail_seconds, values.object_delay_samples, values.native_threads,
                   values.ffmpeg_path.c_str());
     append_to(text, values.force_int24 ? " int24=forced" : "");
+    append_to(text, values.language == joc_lang::Language::kSystem
+                        ? " language=system"
+                        : (values.language == joc_lang::Language::kEnglish
+                               ? " language=english"
+                               : " language=chinese"));
     return text;
 }
 

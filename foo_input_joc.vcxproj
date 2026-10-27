@@ -99,6 +99,7 @@
     <ClCompile Include="src\eac3_scan.cpp" />
     <ClCompile Include="src\input_joc.cpp" />
     <ClCompile Include="src\joc_decode.cpp" />
+    <ClCompile Include="src\lang.cpp" />
     <ClCompile Include="src\log.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\prefs.cpp" />
@@ -110,6 +111,7 @@
     <ClInclude Include="src\eac3_scan.h" />
     <ClInclude Include="src\joc_decode.h" />
     <ClInclude Include="src\joc_pch.h" />
+    <ClInclude Include="src\lang.h" />
     <ClInclude Include="src\log.h" />
     <ClInclude Include="src\prefs.h" />
     <ClInclude Include="src\resource.h" />

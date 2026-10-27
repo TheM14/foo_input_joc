@@ -59,10 +59,10 @@ Matroska/WebM Reader** in that list. Bare `.eac3` / `.ec3` files do not depend o
 
 Preferences → Tools → **JOC decoder**:
 
-* **Output** — binaural, or a speaker layout from 2.0 to 9.1.6 (see
-  [Speaker layouts and channel order](#speaker-layouts-and-channel-order));
+* **Output** — **Binaural (HRTF)**, or a **Speaker layout** from 2.0 to 9.1.6 (names and channel order
+  in the [table below](#speaker-layouts-and-channel-order));
 * **Binaural mode** (near / mid / far) and the room **tail** in seconds;
-* **HRTF source** — a **SOFA** file or a **Rosella** `.personalized_headphone` model. An empty
+* **HRTF** — a **SOFA file** or a **Rosella personalized model**. An empty
   path means the default location, `<component directory>\HRTF\binaural.sofa` or
   `binaural.personalized_headphone`;
 * **Gain** — a switch and a value in dB. Binaural rendering can exceed full scale on material
@@ -76,9 +76,17 @@ Preferences → Tools → **JOC decoder**:
   from the Media Library and add it again): foobar2000 caches technical information per file, and
   until it is reloaded Properties and the Converter still go by the old 32-bit floating-point
   answer, warning that the encoder does not take floating-point input.
-* the **ffmpeg** executable to use.
+* the **ffmpeg.exe** executable to use.
+* **Language** — **Follow system** / **简体中文** / **English**. Every string on the page, the status
+  lines and the errors a user can see use the selected language, and switching takes effect
+  immediately; the choice is stored in the component's own configuration. "Follow system" goes by
+  the Windows user-interface language: Chinese (including Traditional) reads the simplified Chinese
+  column, everything else reads English. The setting only affects interface text; decoding and
+  rendering never read it.
 
-No control on the page is disabled, and the status line states what is in effect.
+No control on the page is disabled, and the status line states what is in effect. The control names
+above are the English ones; the Chinese page names the same controls 输出, 扬声器布局, 双耳模式,
+HRTF 文件, 增益.
 
 ### Speaker layouts and channel order
 
@@ -86,6 +94,8 @@ No control on the page is disabled, and the status line states what is in effect
 |---|---|---|---|
 | 2.0 | 2 | `0x3` | FL FR |
 | 3.1 | 4 | `0xF` | FL FR FC LFE |
+| 4.0 Surround | 4 | `0x107` | FL FR FC BC |
+| 4.0 Quad | 4 | `0x33` | FL FR BL BR |
 | 5.1 | 6 | `0x3F` | FL FR FC LFE BL BR |
 | 7.1 | 8 | `0x63F` | FL FR FC LFE BL BR SL SR |
 | 5.1.2 | 8 | `0x560F` | FL FR FC LFE SL SR TFL TFR |
@@ -95,27 +105,36 @@ No control on the page is disabled, and the status line states what is in effect
 | 9.1.4 | 14 | `0x2D6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFR TBL TBR |
 | 9.1.6 | 16 | `0x3F6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFC TFR TBL TBC TBR |
 
+**There are two 4.0 layouts, and they are different speaker sets, not two spellings of one layout.**
+**4.0 Surround** is a front trio plus one back-centre speaker (`FL FR FC BC`; the renderer calls the
+channels `L R C Cs`). **4.0 Quad** is a front and a back pair (`FL FR BL BR`; `L R Lrs Rrs`) with
+neither a centre nor an LFE — an object straight ahead is a phantom image of the front pair, and the
+LFE in the input has no output channel in this layout, so by the core's rule it is not mixed into
+the others. Older builds had only the name `4.0`, which always meant the surround layout: the core
+resolves `4.0` as an alias for `4.0 Surround` (the page shows `4.0 Surround`, and an applied page
+stores the explicit name), and Quad has to be asked for as `4.0 Quad`.
+
 The renderer emits the reference implementation's channel order (for 9.1.4: L R C LFE Lrs Rrs Ls Rs
 Ltf Rtf Ltr Rtr Lw Rw), while foobar2000 defines the interleaved order as the ascending order of the
-channel mask's speaker bits. The two agree for 2.0 through 7.1.4; 9.1.4 and 9.1.6 carry the wide
-pair last, so the channels are permuted into mask order before delivery (the log says `channels
-permuted into mask order`). The table above is that order; Properties shows the matching
-`WAVEFORMATEXTENSIBLE_CHANNEL_MASK`, and the Converter writes files in the same order.
+channel mask's speaker bits. The two agree for 2.0 through 7.1.4 (both 4.0 layouts included); 9.1.4
+and 9.1.6 carry the wide pair last, so the channels are permuted into mask order before delivery
+(the log says `channels permuted into mask order`). The table above is that order; Properties shows
+the matching `WAVEFORMATEXTENSIBLE_CHANNEL_MASK`, and the Converter writes files in the same order.
 
 The mask follows ffmpeg's definition of the same layout name (`5.1` is BL/BR, `5.1.2` and up are
-SL/SR, the wide pair is FCL/FCR), so a layout name means the same thing in the component, in a
-converted file and in other tools. **9.1.6's top-middle pair (Ltm/Rtm) has no WAVE position** — ffmpeg
-places it at TSL/TSR, beyond a 32-bit mask — so it is delivered at the two centre positions the mask
-has left, TFC and TBC: the mask still has exactly one bit per channel and the order is the one in the
-table, at the cost of those two channels being labelled top front centre / top back centre in
-foobar2000's channel lists.
+SL/SR, the wide pair is FCL/FCR, `4.0` is FL FR FC BC), so a layout name means the same thing in the
+component, in a converted file and in other tools. **9.1.6's top-middle pair (Ltm/Rtm) has no WAVE
+position** — ffmpeg places it at TSL/TSR, beyond a 32-bit mask — so it is delivered at the two centre
+positions the mask has left, TFC and TBC: the mask still has exactly one bit per channel and the
+order is the one in the table, at the cost of those two channels being labelled top front centre /
+top back centre in foobar2000's channel lists.
 
-**Layouts other than 2.0 / 5.1 / 7.1 need ASIO (or an exclusive output that accepts the
-layout).** foobar2000's shared and exclusive outputs follow the Windows speaker configuration, of
-which those are the only multichannel ones; ASIO has no such limit and maps the channels in the
-order the component delivers them (assign them by name in fb2k's ASIO channel mapping). With such a
-layout on a system-configured output the core downmixes the extra channels — audible, but those
-channels are not heard; the Converter is not bound by the output device and writes 14- or
+**Windows itself has only the 2.0 / 5.1 / 7.1 speaker configurations, so every other layout (3.1,
+both 4.0 layouts, anything with height or wide channels) needs ASIO (or an exclusive output that
+accepts the layout) on shared and exclusive output.** ASIO has no such limit and maps the channels
+in the order the component delivers them (assign them by name in fb2k's ASIO channel mapping). With
+such a layout on a system-configured output the core downmixes the extra channels — audible, but
+those channels are not heard; the Converter is not bound by the output device and writes 4-, 14- or
 16-channel files as configured. The preferences status line says "needs ASIO output" when such a
 layout is selected.
 
@@ -140,7 +159,8 @@ byte-for-byte acceptance rests on, so it must not be changed. `foo_input_joc.vcx
 `kernel/` are compiled with `JOC_STATIC` / `EJOC_STATIC`, so their entry points are neither
 imported nor exported. `tests\` holds the offline tools (bitstream self-test and cross-check,
 render comparison, speaker-layout table and channel-order check, preferences-page layout check,
-container-probe check) and `tools\` the build and test-bed scripts. Settings also read `JOC_*`
+Chinese and English text-width check, container-probe check) and `tools\` the build and test-bed
+scripts. Settings also read `JOC_*`
 environment overrides for one run (development only); the list and what each one does is in
 `src\settings.cpp`.
 

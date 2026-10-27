@@ -13,6 +13,7 @@
 #include <string>
 
 #include "joc_decode.h"
+#include "lang.h"
 
 namespace joc_settings {
 
@@ -45,6 +46,9 @@ struct Values {
     unsigned object_delay_samples = 1473;
     unsigned native_threads = 0;
     std::string ffmpeg_path = "ffmpeg";
+    // Language of the page, the status lines and the messages; kSystem follows
+    // the Windows user-interface language.  Decoding and rendering never read it.
+    joc_lang::Language language = joc_lang::Language::kSystem;
 };
 
 Values defaults();

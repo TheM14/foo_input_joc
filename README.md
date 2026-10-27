@@ -50,22 +50,26 @@ Matroska/WebM Reader** 之前。裸流 `.eac3` / `.ec3` 不受这个顺序影响
 
 ## 设置
 
-Preferences → Tools → **JOC decoder**：
+Preferences → Tools → **JOC 解码器**：
 
-* **Output** —— 双耳，或 2.0 到 9.1.6 的扬声器布局（见[扬声器布局与声道顺序](#扬声器布局与声道顺序)）；
-* **Binaural mode**（near / mid / far）与房间 **tail** 秒数；
-* **HRTF source** —— **SOFA** 文件或 **Rosella** `.personalized_headphone` 模型。路径留空表示
+* **输出** —— **双耳（HRTF）**，或 **扬声器布局**：2.0 到 9.1.6，布局名与声道顺序见[下表](#扬声器布局与声道顺序)；
+* **双耳模式**（near / mid / far）与房间**尾音**秒数；
+* **HRTF** —— **SOFA 文件**或 **Rosella 个性化模型**。路径留空表示
   用默认位置 `<组件目录>\HRTF\` 下的 `binaural.sofa` 或 `binaural.personalized_headphone`；
-* **Gain** —— 开关加 dB 值。双耳渲染在核心混音不削顶的素材上也可能超过满刻度，衰减放在这里；
+* **增益** —— 开关加 dB 值。双耳渲染在核心混音不削顶的素材上也可能超过满刻度，衰减放在这里；
 * **强制 24bit 输出（int24）** —— 默认关闭，交付 float32。打开后，交付前按内核写 WAV 的 int24
   规则量化（截到 ±1 → ×8388607 → 截断），超范围的样本被截断到边缘、次数记进日志；组件同时把该
   文件的技术信息报成 24bit 定点。渲染本身仍是 float32，这一项说的是交付给 foobar2000 的采样精度，
   不是输出设备的位深（那个在 Preferences → Output 里设置）。**切换这个开关后要刷新文件信息**
   （Properties → Reload info，或把文件从媒体库移除后重新加入）：foobar2000 按文件缓存技术信息，
   缓存没刷新时 Properties 与转换器仍按旧的 32bit 浮点判断，会提示"编码器不支持浮点输入"。
-* **ffmpeg** 可执行文件路径。
+* **ffmpeg.exe** 可执行文件路径。
+* **界面语言** —— **跟随系统** / **简体中文** / **English**。设置页的全部文字、状态行和用户可见的
+  错误信息都用这一项选定的语言，切换后立刻生效；选择存在组件自己的配置里。"跟随系统"按 Windows 的
+  界面语言决定：中文（含繁体）用简体中文，其它语言用英文。这一项只影响界面文字，解码与渲染不读它。
 
-页面上的控件都不禁用，状态行会说明当前生效的是什么。
+页面上的控件都不禁用，状态行会说明当前生效的是什么。中文页面的控件名与上表一致，英文页面是同一些
+控件的译文（例如 **Output**、**Speaker layout**、**Binaural mode**、**HRTF file**、**Apply gain**）。
 
 ### 扬声器布局与声道顺序
 
@@ -73,6 +77,8 @@ Preferences → Tools → **JOC decoder**：
 |---|---|---|---|
 | 2.0 | 2 | `0x3` | FL FR |
 | 3.1 | 4 | `0xF` | FL FR FC LFE |
+| 4.0 Surround | 4 | `0x107` | FL FR FC BC |
+| 4.0 Quad | 4 | `0x33` | FL FR BL BR |
 | 5.1 | 6 | `0x3F` | FL FR FC LFE BL BR |
 | 7.1 | 8 | `0x63F` | FL FR FC LFE BL BR SL SR |
 | 5.1.2 | 8 | `0x560F` | FL FR FC LFE SL SR TFL TFR |
@@ -82,23 +88,31 @@ Preferences → Tools → **JOC decoder**：
 | 9.1.4 | 14 | `0x2D6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFR TBL TBR |
 | 9.1.6 | 16 | `0x3F6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFC TFR TBL TBC TBR |
 
+**4.0 有两个布局，它们是不同的扬声器集合，不是同一个布局的两种叫法。** **4.0 Surround** 是前置
+三声道加一只后中（`FL FR FC BC`，渲染内核里的名字是 `L R C Cs`）；**4.0 Quad** 是前后各一对
+（`FL FR BL BR`，内核里是 `L R Lrs Rrs`），既没有中置也没有 LFE——对象在正前方时由左右两只音箱
+合成幻像中置，输入里的 LFE 在这种布局下没有输出声道，按内核规则不混入其它声道。旧版本只有 `4.0`
+一个名字，含义一直是 Surround，因此读到 `4.0` 时按 `4.0 Surround` 处理（设置页显示为
+`4.0 Surround`，应用一次设置后存的就是显式名字）；要 Quad 必须写 `4.0 Quad`。
+
 渲染内核按参考实现的顺序产生声道（9.1.4 是 L R C LFE Lrs Rrs Ls Rs Ltf Rtf Ltr Rtr Lw Rw），
-而 foobar2000 规定"帧内声道顺序 = 通道掩码中声道位的升序"。两者对 2.0 到 7.1.4 恰好一致；
-9.1.4 与 9.1.6 的宽声道排在后面，所以交付前按掩码顺序重排（日志里写 `channels permuted into
+而 foobar2000 规定"帧内声道顺序 = 通道掩码中声道位的升序"。两者对 2.0 到 7.1.4（含两种 4.0）恰好
+一致；9.1.4 与 9.1.6 的宽声道排在后面，所以交付前按掩码顺序重排（日志里写 `channels permuted into
 mask order`）。上表就是这个顺序；Properties 里能看到对应的 `WAVEFORMATEXTENSIBLE_CHANNEL_MASK`，
 转换器写文件时也按同一个顺序落盘。
 
-掩码取 ffmpeg 对同名布局的定义（`5.1` 是 BL/BR，`5.1.2` 起是 SL/SR，宽声道是 FCL/FCR），这样同一
-个布局名在组件、转换产物与其它工具里含义一致。**9.1.6 的顶层中间声道对（Ltm/Rtm）在 WAVE 的 18
-个声道位里没有对应位置**（ffmpeg 用 32 位掩码之外的 TSL/TSR），因此按 TFL/TFC/TFR/TBL/TBC/TBR 中
-剩下的两个居中位置 TFC 与 TBC 交付：掩码仍然是一位声道一个位，顺序如上表，代价是这两路在
-foobar2000 的声道列表里显示为顶前排中、顶后排中。
+掩码取 ffmpeg 对同名布局的定义（`5.1` 是 BL/BR，`5.1.2` 起是 SL/SR，宽声道是 FCL/FCR，`4.0` 是
+FL FR FC BC），这样同一个布局名在组件、转换产物与其它工具里含义一致。**9.1.6 的顶层中间声道对
+（Ltm/Rtm）在 WAVE 的 18 个声道位里没有对应位置**（ffmpeg 用 32 位掩码之外的 TSL/TSR），因此按
+TFL/TFC/TFR/TBL/TBC/TBR 中剩下的两个居中位置 TFC 与 TBC 交付：掩码仍然是一位声道一个位，顺序如
+上表，代价是这两路在 foobar2000 的声道列表里显示为顶前排中、顶后排中。
 
-**2.0 / 5.1 / 7.1 之外的布局需要 ASIO（或接受该布局的独占输出）。** foobar2000 的共享与独占输出
-跟随 Windows 的扬声器配置，只有这几个配置；高度声道、宽声道与超过 8 声道的布局 ASIO 没有限制，声道
-按组件交付的顺序对应到设备的输出通道（用 fb2k 的 ASIO 声道映射按名称分配）。用这样的布局而输出仍
-走系统配置时，核心会把多出来的声道下混——能听到声音，但听不到那几路；转换器（Converter）不受输出
-设备限制，可以按布局写出 14/16 声道的文件。设置页的状态行在选中这类布局时会写"需要 ASIO 输出"。
+**Windows 自己只有 2.0 / 5.1 / 7.1 三种扬声器配置，其余布局（3.1、两种 4.0、所有带高度或宽声道的
+布局）的共享与独占输出都需要 ASIO（或接受该布局的独占输出）。** 高度声道、宽声道、后中与超过 8
+声道的布局 ASIO 没有限制，声道按组件交付的顺序对应到设备的输出通道（用 fb2k 的 ASIO 声道映射按名称
+分配）。用这样的布局而输出仍走系统配置时，核心会把多出来的声道下混——能听到声音，但听不到那几路；
+转换器（Converter）不受输出设备限制，可以按布局写出 4/14/16 声道的文件。设置页的状态行在选中这类
+布局时会写"需要 ASIO 输出"。
 
 ### HRTF 数据
 
@@ -117,8 +131,8 @@ pwsh -File tools/package.ps1            # 两个架构，打包到 dist\*.fb2k-c
 配置固定为 `Release-Static`（静态 CRT，`/MT`）；`/fp:precise` 是逐字节验收的前提，不要改。
 `foo_input_joc.vcxproj` 通过项目引用先构建 `kernel\joc_kernel.vcxproj`；`kernel/` 里的渲染内核
 源码以 `JOC_STATIC` / `EJOC_STATIC` 编译，入口既不导入也不导出。`tests\` 是离线工具（码流
-自检与交叉核对、渲染比对、布局表与频道顺序检查、设置页布局检查、容器探测检查），`tools\` 是构建
-与测试床脚本。设置项另有 `JOC_*` 环境变量覆盖（仅用于开发运行），清单与含义在 `src\settings.cpp`。
+自检与交叉核对、渲染比对、布局表与频道顺序检查、设置页布局检查、中英文文字宽度检查、容器探测
+检查），`tools\` 是构建与测试床脚本。设置项另有 `JOC_*` 环境变量覆盖（仅用于开发运行），清单与含义在 `src\settings.cpp`。
 
 排查问题看 DLL 旁边的 `joc_decoder.log`；组件启动时会把自己的版本、核心版本、日志路径写在
 里面。日志按**字节**封顶：单个文件写满 16 MiB 就滚到同目录的 `joc_decoder.log.1`（覆盖上一次

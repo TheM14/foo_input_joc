@@ -8,7 +8,9 @@
 #include <SDK/componentversion.h>
 #include <SDK/coreversion.h>
 #include <SDK/initquit.h>
+#include "lang.h"
 #include "log.h"
+#include "settings.h"
 
 // Kept in one place: the string reported to foobar2000 and written to the log
 // must not drift apart.
@@ -42,6 +44,15 @@ public:
         joc_log::line("log file        : %s", joc_log::path());
         joc_log::line("log limit       : %llu byte(s) per file, then rolled to the .1 suffix",
                       joc_log::budget_bytes());
+        const joc_settings::Values stored = joc_settings::read();
+        joc_log::line("interface language: %s (stored: %s)",
+                      joc_lang::resolve(stored.language) == joc_lang::Language::kEnglish
+                          ? "english"
+                          : "chinese",
+                      stored.language == joc_lang::Language::kSystem
+                          ? "system default"
+                          : (stored.language == joc_lang::Language::kEnglish ? "english"
+                                                                            : "chinese"));
         joc_log::line("compiled as     : %s",
 #if defined(_M_IX86)
                       "x86 (32-bit)"

@@ -62,6 +62,8 @@ struct Expected {
 const Expected kExpected[] = {
     {"2.0", "L R", "L R", 0x3},
     {"3.1", "L R C LFE", "L R C LFE", 0xF},
+    {"4.0 Surround", "L R C Cs", "L R C Cs", 0x107},
+    {"4.0 Quad", "L R Lrs Rrs", "L R Lrs Rrs", 0x33},
     {"5.1", "L R C LFE Ls Rs", "L R C LFE Ls Rs", 0x3F},
     {"7.1", "L R C LFE Lrs Rrs Ls Rs", "L R C LFE Lrs Rrs Ls Rs", 0x63F},
     {"5.1.2", "L R C LFE Ls Rs Ltm Rtm", "L R C LFE Ls Rs Ltm Rtm", 0x560F},
@@ -198,8 +200,10 @@ int main() {
     for (const Expected& expected : kExpected) check_layout(expected);
 
     // Names the table must not claim: the page used to offer these, and the kernel
-    // rejects every one of them.
-    for (const char* rejected : {"3.0", "4.0", "5.0", "6.1", "7.0", "22.2", ""}) {
+    // rejects every one of them.  ("4.0" is not in this list: the kernel resolves it
+    // to 4.0 Surround for old configurations, and the settings migration rewrites it
+    // to the explicit name.)
+    for (const char* rejected : {"3.0", "5.0", "6.1", "7.0", "22.2", ""}) {
         check(joc_decode::speaker_channels(rejected) == 0, "unsupported layout rejected",
               rejected);
         joc_decode::LayoutDelivery delivery;

@@ -312,6 +312,12 @@ private:
 // "5.1" means to ffmpeg), while 5.1.2 and up use the side pair (SL/SR).  The wide
 // pair of 9.1.x has one home only: FCL/FCR (ffmpeg spells the same two FLC/FRC).
 //
+// The two 4.0 layouts are different speaker sets, not two spellings of one layout:
+// 4.0 Surround is a front trio plus one back-centre speaker (0x107), 4.0 Quad is a
+// front pair and a back pair with neither centre nor LFE (0x33).  The bare name
+// "4.0" has always meant the former, so the kernel resolves it as an alias for it
+// and a stored value is migrated to the explicit name.
+//
 // 9.1.6 is the one layout WAVE cannot describe completely: it has three height
 // pairs, and the mask has positions for two (TFL/TFR, TBL/TBR) plus single centre
 // positions.  The top-middle pair -- ffmpeg's TSL/TSR, above a 32-bit mask -- is
@@ -325,6 +331,14 @@ const LayoutSpec kLayouts[] = {
      4,
      {"L", "R", "C", "LFE"},
      {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe}},
+    {"4.0 Surround",
+     4,
+     {"L", "R", "C", "Cs"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerBackCenter}},
+    {"4.0 Quad",
+     4,
+     {"L", "R", "Lrs", "Rrs"},
+     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerBackLeft, kSpeakerBackRight}},
     {"5.1",
      6,
      {"L", "R", "C", "LFE", "Ls", "Rs"},
@@ -1084,15 +1098,18 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
         const std::string& hrtf_file = hrtf_in_use;
         if (hrtf_file.empty()) {
             if (error != nullptr) {
-                *error = "双耳渲染需要 HRTF 文件，但组件目录无法确定；请在设置页里显式指定路径";
+                *error = "the component directory is unknown, so the default HRTF location "
+                         "cannot be resolved; name an HRTF file in the preferences page";
             }
             return false;
         }
         if (!file_exists(hrtf_file)) {
             if (error != nullptr) {
-                *error = std::string("找不到 HRTF 文件：") + hrtf_file +
-                         (settings.hrtf_file.empty() ? "（默认位置，可在设置页里指定其它路径）"
-                                                     : "");
+                *error = "HRTF file not found: " + hrtf_file +
+                         (settings.hrtf_file.empty()
+                              ? " (the default location; another file can be named in the "
+                                "preferences page)"
+                              : "");
             }
             return false;
         }

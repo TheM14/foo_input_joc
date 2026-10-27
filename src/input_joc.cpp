@@ -507,14 +507,23 @@ public:
         std::string error;
         if (!m_engine.start(m_native_path.get_ptr(), m_settings, &error)) {
             joc_log::line("decoder: engine start failed: %s", error.c_str());
-            // The most common cause by far, and the one a user can act on.
-            if (m_settings.output == joc_decode::Output::kBinaural &&
-                m_settings.hrtf_file.empty()) {
-                throw exception_io_data(
-                    "JOC：双耳渲染需要先指定 HRTF 文件（Preferences -> Tools -> JOC 解码器），"
-                    "或把输出改为扬声器布局。");
-            }
-            throw exception_io_data(error.c_str());
+            // The message the user sees is in the page's language; the engine's own
+            // line stays English and follows it, because it names the file or the
+            // stream the failure came from.
+            const joc_lang::Language language =
+                joc_lang::resolve(joc_settings::read().language);
+            std::string message = joc_lang::get(
+                language, m_settings.output == joc_decode::Output::kBinaural
+                              ? joc_lang::Text::kErrorHrtfNeeded
+                              : joc_lang::Text::kErrorRenderStream);
+            message += "\n";
+            message += error;
+            // Logged as well: the dialog the host shows is not part of a support log,
+            // and which language was in effect is part of the report.
+            joc_log::line("decoder: reporting to the user (%s):\n%s",
+                          language == joc_lang::Language::kEnglish ? "english" : "chinese",
+                          message.c_str());
+            throw exception_io_data(message.c_str());
         }
         m_channels = m_engine.channels();
         if (m_channels == 0) m_channels = 2;
@@ -644,7 +653,12 @@ public:
             // An aborted seek reports itself as an abort, not as a decode failure.
             abort.check();
             joc_log::line("decoder: seek to %.6f s failed: %s", seconds, error.c_str());
-            throw exception_io_data(error.c_str());
+            const joc_lang::Language language =
+                joc_lang::resolve(joc_settings::read().language);
+            std::string message = joc_lang::get(language, joc_lang::Text::kErrorSeek);
+            message += "\n";
+            message += error;
+            throw exception_io_data(message.c_str());
         }
         // The position reporting and the first-read statistics belong to the run
         // that starts here, not to the one that was interrupted.
