@@ -33,7 +33,6 @@ enum class Text {
     kCheckInt24,
     kInt24Hint,
     kSpeakerStatus,
-    kSpeakerStatusAsio,
     kGroupHrtf,
     kRadioSofa,
     kRadioRosella,

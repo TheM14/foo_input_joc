@@ -106,49 +106,27 @@ struct Settings {
 
 // ---- speaker delivery ------------------------------------------------------
 //
-// The renderer emits a layout in the reference table's own channel order.  What
-// foobar2000 receives has to be ordered by its channel mask instead, because the
-// host defines the interleaved channel order as the ascending order of the mask's
-// speaker flags (SDK audio_chunk.h: "order of interleaved channel data in the
-// stream is same as order of these flags").  For most layouts both orders agree;
-// 9.1.4 and 9.1.6 are the ones where they do not, and the channels are permuted
-// here rather than declaring a mask that says the wrong thing about them.
-//
-// The flag values are the WAVE speaker positions, which is also what
-// audio_chunk's channel map uses, so a mask can be handed to the host unchanged.
-enum SpeakerFlag : unsigned {
-    kSpeakerFrontLeft = 0x1,
-    kSpeakerFrontRight = 0x2,
-    kSpeakerFrontCenter = 0x4,
-    kSpeakerLfe = 0x8,
-    kSpeakerBackLeft = 0x10,
-    kSpeakerBackRight = 0x20,
-    kSpeakerFrontCenterLeft = 0x40,   // the wide pair of 9.1.x
-    kSpeakerFrontCenterRight = 0x80,
-    kSpeakerBackCenter = 0x100,
-    kSpeakerSideLeft = 0x200,
-    kSpeakerSideRight = 0x400,
-    kSpeakerTopCenter = 0x800,
-    kSpeakerTopFrontLeft = 0x1000,
-    kSpeakerTopFrontCenter = 0x2000,
-    kSpeakerTopFrontRight = 0x4000,
-    kSpeakerTopBackLeft = 0x8000,
-    kSpeakerTopBackCenter = 0x10000,
-    kSpeakerTopBackRight = 0x20000,
-};
+// The renderer emits a layout in the order the reference table defines for it,
+// and that order is what foobar2000 receives.  The host defines the interleaved
+// channel order of a chunk as the ascending order of the channel map's speaker
+// flags (SDK audio_chunk.h: "order of interleaved channel data in the stream is
+// same as order of these flags"), so a channel map may only be declared when it
+// describes exactly that order.  Only stereo does, so the component declares no
+// map for the file and gives each chunk the host's own default map for the channel
+// count (see input_joc.cpp): the map carries the count, not positions, and the PCM
+// is handed over unchanged.  Channel numbers are the positions in the layout table
+// below; mapping them to physical speakers belongs to the player or the user.
 
 // The widest layout the core renders; the channel arrays below are sized for it.
 inline constexpr unsigned kMaxLayoutChannels = 16;
 
 // A layout the core accepts, with its channels in the order the renderer emits
-// them.  The names are the reference table's speaker names; the flags are the
-// WAVE positions they are delivered as.  Both are listed for the same channel, so
-// the correspondence can be checked against the reference renderer's table.
+// them.  The names are the reference table's speaker names, so a channel can be
+// checked against the kernel's table and against the reference renderer.
 struct LayoutSpec {
     const char* name;
     unsigned channels;
     const char* speakers[kMaxLayoutChannels];
-    unsigned flags[kMaxLayoutChannels];
 };
 
 // Every layout the core accepts, in the order a settings page should list them.
@@ -157,23 +135,6 @@ const LayoutSpec* layout_table(std::size_t* count);
 // Channel count of a named layout, or 0 when the layout is not one of the
 // layouts the core accepts.
 unsigned speaker_channels(const std::string& layout);
-
-// What the host has to be told about a layout, and how the renderer's channels
-// have to be arranged to match: delivered channel i is renderer channel order[i].
-struct LayoutDelivery {
-    unsigned channels = 0;
-    unsigned mask = 0;
-    unsigned order[kMaxLayoutChannels] = {};
-    bool reordered = false;
-};
-
-// Fills *out for a layout the core accepts; returns false for anything else.
-bool layout_delivery(const std::string& layout, LayoutDelivery* out);
-
-// One interleaved block, renderer order -> delivery order.  `source` and
-// `target` may be the same buffer only when the layout needs no permutation.
-void apply_delivery_order(const LayoutDelivery& delivery, const float* source,
-                          std::size_t frames, float* target);
 
 // Directory this component's DLL was loaded from.  The default HRTF folder is
 // <that directory>\HRTF, the same place the reference CLI looks next to its exe.

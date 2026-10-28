@@ -67,13 +67,6 @@ void set_text(HWND control, const std::string& text) {
     SetWindowTextW(control, wide(text).c_str());
 }
 
-// The speaker configurations Windows itself has are 2.0, 5.1 and 7.1.  Anything
-// else -- a height channel, either 4.0 layout, more than eight channels -- is not
-// carried by a shared or exclusive output, so the status line points at ASIO.
-bool windows_speaker_config(unsigned mask) {
-    return mask == 0x3u || mask == 0x3Fu || mask == 0x63Fu;
-}
-
 // A drop-down list's items are rebuilt whenever the language changes, and the
 // selection has to survive that.
 void fill_combo(HWND combo, const std::vector<std::string>& items, int selected) {
@@ -451,9 +444,7 @@ private:
             }
         }
         // The list comes from the core-facing table, so the page cannot offer a
-        // layout the decoder rejects.  Offering one is not a promise that an output
-        // can play it: shared and exclusive outputs follow the Windows speaker
-        // configuration, ASIO passes any channel count through.
+        // layout the decoder rejects.
         fill_combo(GetDlgItem(m_hwnd, IDC_COMBO_LAYOUT), names, layout_index);
         apply_texts();
     }
@@ -504,16 +495,9 @@ private:
         std::string output_status;
         if (values.output != 0) {
             char text[192] = {};
-            const unsigned channels = joc_decode::speaker_channels(values.speaker_layout);
-            joc_decode::LayoutDelivery delivery;
-            const bool plain =
-                joc_decode::layout_delivery(values.speaker_layout, &delivery) &&
-                windows_speaker_config(delivery.mask);
-            std::snprintf(
-                text, sizeof(text),
-                joc_lang::get(language, joc_lang::Text::kSpeakerStatus),
-                values.speaker_layout.c_str(), channels,
-                plain ? "" : joc_lang::get(language, joc_lang::Text::kSpeakerStatusAsio));
+            std::snprintf(text, sizeof(text),
+                          joc_lang::get(language, joc_lang::Text::kSpeakerStatus),
+                          values.speaker_layout.c_str());
             output_status = text;
         }
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_OUTPUT_STATUS), output_status);

@@ -88,61 +88,56 @@ No control on the page is disabled, and the status line states what is in effect
 above are the English ones; the Chinese page names the same controls 输出, 扬声器布局, 双耳模式,
 HRTF 文件, 增益.
 
-### Speaker layouts and channel order
-
-| Layout | Channels | Channel mask | Delivered order (declared speaker positions) |
-|---|---|---|---|
-| 2.0 | 2 | `0x3` | FL FR |
-| 3.1 | 4 | `0xF` | FL FR FC LFE |
-| 4.0 Surround | 4 | `0x107` | FL FR FC BC |
-| 4.0 Quad | 4 | `0x33` | FL FR BL BR |
-| 5.1 | 6 | `0x3F` | FL FR FC LFE BL BR |
-| 7.1 | 8 | `0x63F` | FL FR FC LFE BL BR SL SR |
-| 5.1.2 | 8 | `0x560F` | FL FR FC LFE SL SR TFL TFR |
-| 5.1.4 | 10 | `0x2D60F` | FL FR FC LFE SL SR TFL TFR TBL TBR |
-| 7.1.2 | 10 | `0x563F` | FL FR FC LFE BL BR SL SR TFL TFR |
-| 7.1.4 | 12 | `0x2D63F` | FL FR FC LFE BL BR SL SR TFL TFR TBL TBR |
-| 9.1.4 | 14 | `0x2D6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFR TBL TBR |
-| 9.1.6 | 16 | `0x3F6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFC TFR TBL TBC TBR |
-
-**There are two 4.0 layouts, and they are different speaker sets, not two spellings of one layout.**
-**4.0 Surround** is a front trio plus one back-centre speaker (`FL FR FC BC`; the renderer calls the
-channels `L R C Cs`). **4.0 Quad** is a front and a back pair (`FL FR BL BR`; `L R Lrs Rrs`) with
-neither a centre nor an LFE — an object straight ahead is a phantom image of the front pair, and the
-LFE in the input has no output channel in this layout, so by the core's rule it is not mixed into
-the others. Older builds had only the name `4.0`, which always meant the surround layout: the core
-resolves `4.0` as an alias for `4.0 Surround` (the page shows `4.0 Surround`, and an applied page
-stores the explicit name), and Quad has to be asked for as `4.0 Quad`.
-
-The renderer emits the reference implementation's channel order (for 9.1.4: L R C LFE Lrs Rrs Ls Rs
-Ltf Rtf Ltr Rtr Lw Rw), while foobar2000 defines the interleaved order as the ascending order of the
-channel mask's speaker bits. The two agree for 2.0 through 7.1.4 (both 4.0 layouts included); 9.1.4
-and 9.1.6 carry the wide pair last, so the channels are permuted into mask order before delivery
-(the log says `channels permuted into mask order`). The table above is that order; Properties shows
-the matching `WAVEFORMATEXTENSIBLE_CHANNEL_MASK`, and the Converter writes files in the same order.
-
-The mask follows ffmpeg's definition of the same layout name (`5.1` is BL/BR, `5.1.2` and up are
-SL/SR, the wide pair is FCL/FCR, `4.0` is FL FR FC BC), so a layout name means the same thing in the
-component, in a converted file and in other tools. **9.1.6's top-middle pair (Ltm/Rtm) has no WAVE
-position** — ffmpeg places it at TSL/TSR, beyond a 32-bit mask — so it is delivered at the two centre
-positions the mask has left, TFC and TBC: the mask still has exactly one bit per channel and the
-order is the one in the table, at the cost of those two channels being labelled top front centre /
-top back centre in foobar2000's channel lists.
-
-**Windows itself has only the 2.0 / 5.1 / 7.1 speaker configurations, so every other layout (3.1,
-both 4.0 layouts, anything with height or wide channels) needs ASIO (or an exclusive output that
-accepts the layout) on shared and exclusive output.** ASIO has no such limit and maps the channels
-in the order the component delivers them (assign them by name in fb2k's ASIO channel mapping). With
-such a layout on a system-configured output the core downmixes the extra channels — audible, but
-those channels are not heard; the Converter is not bound by the output device and writes 4-, 14- or
-16-channel files as configured. The preferences status line says "needs ASIO output" when such a
-layout is selected.
-
 ### HRTF data
 
 A SOFA measurement set or a personalised headphone model is supplied by whoever runs the
 component, and is listed in `.gitignore` so it cannot be committed by accident. Speaker layouts
 need none. Binaural rendering without an HRTF fails with a message naming the file it looked for.
+
+## Speaker layouts and channel order
+
+The PCM this component hands to foobar2000, and the multichannel WAV files the Converter writes,
+follow the renderer's channel order:
+
+| Layout | Channel order |
+|---|---|
+| 2.0 | L, R |
+| 3.1 | L, R, C, LFE |
+| 4.0 | L, R, Lrs, Rrs |
+| 5.1 | L, R, C, LFE, Ls, Rs |
+| 7.1 | L, R, C, LFE, Ls, Rs, Lrs, Rrs |
+| 5.1.2 | L, R, C, LFE, Ls, Rs, Ltm, Rtm |
+| 5.1.4 | L, R, C, LFE, Ls, Rs, Ltf, Rtf, Ltr, Rtr |
+| 7.1.2 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Ltm, Rtm |
+| 7.1.4 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Ltf, Rtf, Ltr, Rtr |
+| 9.1.4 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Lw, Rw, Ltf, Rtf, Ltr, Rtr |
+| 9.1.6 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Lw, Rw, Ltf, Rtf, Ltm, Rtm, Ltr, Rtr |
+
+`4.0` is the quad layout this project adds (the traditional `FL FR BL BR`, here `L R Lrs Rrs`): a
+front and a back pair with neither a centre nor an LFE — an object straight ahead is a phantom image
+of the front pair, and the LFE in the input has no output channel in this layout, so by the core's
+rule it is not mixed into the others. Every other layout and channel order follows the Dolby
+specifications.
+
+**Channel order and the foobar2000 limitation.** The component hands the renderer's PCM over
+unchanged, in the order of the table above; when that stream is written to WAV (the playback chunk or
+a Converter output), the order of the 1–16 channels follows the Dolby documentation exactly. The
+channel *definitions*, however, are not guaranteed to correspond fully: foobar2000's WAVE writer can
+only declare a Windows speaker mask, which has no slot for top-middle (`Ts`) or wide (`Ww`) and cannot
+express an order such as 7.1's `Ls Rs Lrs Rrs`. This is a foobar2000 limitation, not a problem with
+the rendered order. Properties declares the channel count and no speaker positions; the chunk used
+while playing carries foobar2000's default map for that channel count (an unspecified map is rejected
+as an invalid audio stream specification and playback fails).
+
+For a multichannel WAV with `dwChannelMask = 0`, download the CLI from
+[github.com/TheM14/JustOneCacophony](https://github.com/TheM14/JustOneCacophony) and export with it: it
+writes `WAVE_FORMAT_EXTENSIBLE` with `dwChannelMask = 0` and the order above.
+
+Mapping the channels to a player, ASIO, a DAW or a device is up to the user; the component guarantees
+the content and numbering of each PCM channel as listed above.
+
+Layout names in the configuration follow the table above; a name that cannot be resolved is logged
+and falls back to `7.1`.
 
 ## Building
 
@@ -175,9 +170,10 @@ every container in the library, which is where the volume comes from.
 
 * ADM BWF output is not implemented.
 * Speaker layouts go up to 9.1.6 (16 channels), which is the renderer's own limit — there is no
-  22.2. Layouts other than 2.0 / 5.1 / 7.1 need ASIO (or an exclusive output that accepts the
-  layout); see [Speaker layouts and channel order](#speaker-layouts-and-channel-order).
-* 9.1.6's top-middle pair has no WAVE channel position and is delivered at TFC/TBC (same section).
+  22.2, see [Speaker layouts and channel order](#speaker-layouts-and-channel-order).
+* A multichannel layout declares no speaker positions in Properties, and the per-chunk map used for
+  playback is only foobar2000's default for the channel count; output mapping is up to the user's
+  channel assignment (same section).
 * All five $joc\_dmx\_config\_idx$ configurations are supported: the bed is paired per audio
   frame, and its channel count follows the configuration (6 channels for 0/3, 8 for 1/2/4), with
   `-ac 6` passed to ffmpeg only for the 6-channel ones. An AC-3 core plus a dependent substream

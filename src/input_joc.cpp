@@ -197,46 +197,16 @@ void read_local_tags(file::ptr const& source, file_info& info, abort_callback& a
     }
 }
 
-// What the host is told about the delivered stream, and the order the renderer's
-// channels have to be arranged in to match.  The layout table says both; the
-// engine's own channel count decides, because a mask must have exactly one bit per
-// channel.  A disagreement is logged and left unmasked rather than declared with a
-// mask that does not describe the data.
-joc_decode::LayoutDelivery delivery_for(const joc_decode::Settings& settings,
-                                        unsigned channels) {
-    constexpr unsigned kMaxChannels = joc_decode::kMaxLayoutChannels;
-    joc_decode::LayoutDelivery delivery;
-    delivery.channels = channels;
-    if (channels > kMaxChannels) {
-        for (unsigned channel = 0; channel < kMaxChannels; ++channel) {
-            delivery.order[channel] = channel;
-        }
-        joc_log::line("decoder: %u channel(s) is more than a layout is described for; "
-                      "delivering unmasked",
-                      channels);
-        return delivery;
-    }
-    if (settings.output == joc_decode::Output::kBinaural) {
-        delivery.mask = (channels == 2) ? (joc_decode::kSpeakerFrontLeft |
-                                           joc_decode::kSpeakerFrontRight)
-                                        : 0u;
-        for (unsigned channel = 0; channel < channels; ++channel) {
-            delivery.order[channel] = channel;
-        }
-        return delivery;
-    }
-    joc_decode::LayoutDelivery table;
-    if (joc_decode::layout_delivery(settings.speaker_layout, &table) &&
-        table.channels == channels) {
-        return table;
-    }
-    for (unsigned channel = 0; channel < channels; ++channel) {
-        delivery.order[channel] = channel;
-    }
-    joc_log::line("decoder: layout %s and the %u rendered channel(s) disagree; "
-                  "delivering unmasked",
-                  settings.speaker_layout.c_str(), channels);
-    return delivery;
+// The chunk channel map handed to the host while playing.  A map of zero (the
+// SDK's "unspecified") is accepted by audio_chunk but rejected further down the
+// output chain ("invalid audio stream specification"), and no WAVE map describes
+// the renderer's order for the wider layouts, so the chunks carry the map the
+// host itself uses for that channel count: it only transports the channel count
+// and makes no claim about Dolby positions.  The file properties stay unspecified
+// (see get_info), so nothing downstream is told a position this layout does not
+// have; the PCM keeps the layout table's order either way.
+unsigned channel_map_for(unsigned channels) {
+    return audio_chunk::g_guess_channel_config(channels);
 }
 
 std::string mask_text(unsigned mask) {
@@ -394,7 +364,6 @@ public:
                 : ((duration > 0.0) ? static_cast<std::uint64_t>(duration * 48000.0 / 1536.0) : 0);
 
         unsigned channels = 2;
-        unsigned mask = joc_decode::kSpeakerFrontLeft | joc_decode::kSpeakerFrontRight;
         std::string render;
         if (settings.output == joc_decode::Output::kBinaural) {
             channels = 2;
@@ -403,10 +372,8 @@ public:
             const unsigned layout_channels = joc_decode::speaker_channels(settings.speaker_layout);
             channels = layout_channels != 0 ? layout_channels : 6;
             render = "speaker " + settings.speaker_layout;
-            joc_decode::LayoutDelivery delivery;
-            mask = joc_decode::layout_delivery(settings.speaker_layout, &delivery) ? delivery.mask
-                                                                                 : 0u;
         }
+        const unsigned mask = channel_map_for(channels);
         // The custom field and the log line state the delivery format, because it
         // is the one thing about the output that a listener cannot hear.
         if (settings.force_int24) render += ", 24-bit delivery";
@@ -415,11 +382,10 @@ public:
         info.info_set("codec_long", "E-AC-3 JOC (Dolby Atmos)");
         info.info_set("encoding", "lossy");
         info.info_set_int("samplerate", kSampleRate);
-        // Channel count and mask together: a layout wider than stereo says which
-        // speaker each channel is, and the host keeps that as the file's
-        // WAVEFORMATEXTENSIBLE channel mask.  The mask the decoder delivers is the
-        // same one, so what Properties says and what the output receives agree.
-        info.info_set_channels_ex(channels, mask);
+        // Properties declares the channel count but no channel map: the delivered
+        // order is not a WAVE speaker order for most layouts, and the chunk map
+        // used for playback only carries the count (see channel_map_for).
+        info.info_set_channels_ex(channels, channels == 2 ? mask : 0u);
         // What the component hands over, which is what the host keeps if it writes a
         // file from this stream: float32 by default, int24 when forced.  This is also
         // what foobar2000's own lossless-conversion warning reads
@@ -527,14 +493,9 @@ public:
         }
         m_channels = m_engine.channels();
         if (m_channels == 0) m_channels = 2;
-        // The mask and the channel order come from the layout the file is being
-        // rendered to; binaural is plain stereo and needs neither.
-        m_delivery = delivery_for(m_settings, m_channels);
-        m_channel_config = m_delivery.mask != 0
-                               ? m_delivery.mask
-                               : audio_chunk::g_guess_channel_config(m_channels);
+        // Only the map the component can describe is declared; see channel_map_for().
+        m_channel_config = channel_map_for(m_channels);
         m_buffer.resize(kRunFrames * m_channels);
-        if (m_delivery.reordered) m_delivery_buffer.resize(kRunFrames * m_channels);
         m_frames_delivered = 0;
         m_reported = false;
         m_delivery_mismatches = 0;
@@ -543,10 +504,9 @@ public:
         // about everything this component handed over.
         m_clipped_samples = 0;
         m_clip_reported = false;
-        joc_log::line("decoder: engine ready, %u output channel(s), mask=%s%s, %u frames per "
+        joc_log::line("decoder: engine ready, %u output channel(s), mask=%s, %u frames per "
                       "read, delivery=%s",
                       m_channels, mask_text(m_channel_config).c_str(),
-                      m_delivery.reordered ? " (channels permuted into mask order)" : "",
                       static_cast<unsigned>(kRunFrames),
                       m_settings.force_int24 ? "int24" : "float32");
     }
@@ -581,16 +541,7 @@ public:
         // the pipeline sees is the 24-bit grid rather than the renderer's float -- which
         // is the whole point of the option.  The quantisation happens here and nowhere
         // else, so a sample is rounded once.
-        //
-        // 9.1.4 and 9.1.6 arrive in the renderer's order and have to be handed over in
-        // the order their channel mask implies; every other layout is already in that
-        // order, and then this is just the renderer's own buffer.
         const float* samples = m_buffer.data();
-        if (m_delivery.reordered) {
-            joc_decode::apply_delivery_order(m_delivery, m_buffer.data(), frames,
-                                             m_delivery_buffer.data());
-            samples = m_delivery_buffer.data();
-        }
 
         double expected_delivered_peak = 0.0;
         if (m_settings.force_int24) {
@@ -745,12 +696,8 @@ private:
     unsigned m_audio_index = 0;
     joc_container::Result m_container;
     std::vector<float> m_buffer;
-    // What the host is told about the stream (channel mask) and how the renderer's
-    // channels have to be arranged to match it; see joc_decode.h.
-    joc_decode::LayoutDelivery m_delivery;
+    // What the host is told about the stream's channel map; see channel_map_for().
     unsigned m_channel_config = 0;
-    // Only used by the layouts whose renderer order differs from mask order.
-    std::vector<float> m_delivery_buffer;
     // int24 delivery: the packed bytes handed to the host, and what the clip caught.
     std::vector<std::uint8_t> m_int24;
     std::uint64_t m_clipped_samples = 0;

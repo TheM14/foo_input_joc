@@ -34,7 +34,6 @@ constexpr GUID kGuidObjectDelay = {0x5b2e9c18, 0xa640, 0x4d7b, {0x92, 0x0e, 0x37
 constexpr GUID kGuidThreads = {0xcb7a4015, 0x3f98, 0x4c62, {0xa0, 0x8d, 0x1b, 0x74, 0x29, 0xe6, 0x53, 0x0f}};
 constexpr GUID kGuidFfmpeg = {0x0e9d37c2, 0x5a18, 0x4b40, {0xb6, 0x3f, 0x88, 0x2d, 0x9a, 0x70, 0x1c, 0x65}};
 constexpr GUID kGuidLanguage = {0x58e17a04, 0x3d92, 0x4f6b, {0xa1, 0x27, 0x94, 0xc8, 0x0b, 0x6d, 0x53, 0xe1}};
-
 cfg_uint g_output(kGuidOutput, 0);
 cfg_string g_layout(kGuidLayout, "7.1");
 // 0 = SOFA, 1 = Rosella model, 2 = compiled .jochrtf (advanced)
@@ -115,21 +114,10 @@ const char* hrtf_default_file_name(HrtfSource source) {
 
 Values defaults() { return Values(); }
 
-namespace {
-
-// The layout name the decoder should use for a stored or overridden value: "4.0"
-// is the spelling older configurations use for the layout the table calls 4.0
-// Surround, so every caller sees one of the names in the layout table.
-std::string canonical_layout(const std::string& layout) {
-    return (layout == "4.0") ? std::string("4.0 Surround") : layout;
-}
-
-}  // namespace
-
 Values read() {
     Values values;
     values.output = static_cast<int>(static_cast<unsigned>(g_output));
-    values.speaker_layout = canonical_layout(g_layout.get_ptr());
+    values.speaker_layout = g_layout.get_ptr();
     // A layout the core does not accept (an old build offered several it never
     // accepted) would fail when the renderer is created, and the page cannot show it
     // either, because its list is the core's own table.  Falling back here makes the
@@ -192,7 +180,7 @@ joc_decode::Settings current() {
 
     std::string text;
     if (env_string("JOC_OUTPUT", &text)) values.output = (text == "speaker") ? 1 : 0;
-    if (env_string("JOC_LAYOUT", &text)) values.speaker_layout = canonical_layout(text);
+    if (env_string("JOC_LAYOUT", &text)) values.speaker_layout = text;
     (void)env_string("JOC_HRTF", &values.hrtf_file);
     if (env_string("JOC_HRTF_SOURCE", &text)) {
         values.hrtf_source = (text == "rosella") ? HrtfSource::kRosella : HrtfSource::kSofa;

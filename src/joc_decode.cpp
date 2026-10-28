@@ -301,95 +301,34 @@ private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
 
-// The layouts the core accepts, in the core's own channel order.  `speakers` are
-// the reference table's names for the channels the renderer emits, `flags` are the
-// WAVE speaker positions those channels are delivered as.  The two lists are per
-// channel, so a wrong entry shows up as a speaker name that does not belong to the
-// flag next to it (tests/layout_table_test.cpp checks them against the kernel).
+// The layouts the core accepts, with the channels in the order the renderer
+// emits them.  `speakers` are the reference table's names for those channels;
+// the kernel is the authority on the list and on the channel counts, and
+// tests/layout_table_test.cpp checks both.
 //
-// Where a name has two WAVE equivalents the reference table's own layout decides:
-// the surround pair of 5.1 sits behind the listener (BL/BR, which is also what
-// "5.1" means to ffmpeg), while 5.1.2 and up use the side pair (SL/SR).  The wide
-// pair of 9.1.x has one home only: FCL/FCR (ffmpeg spells the same two FLC/FRC).
-//
-// The two 4.0 layouts are different speaker sets, not two spellings of one layout:
-// 4.0 Surround is a front trio plus one back-centre speaker (0x107), 4.0 Quad is a
-// front pair and a back pair with neither centre nor LFE (0x33).  The bare name
-// "4.0" has always meant the former, so the kernel resolves it as an alias for it
-// and a stored value is migrated to the explicit name.
-//
-// 9.1.6 is the one layout WAVE cannot describe completely: it has three height
-// pairs, and the mask has positions for two (TFL/TFR, TBL/TBR) plus single centre
-// positions.  The top-middle pair -- ffmpeg's TSL/TSR, above a 32-bit mask -- is
-// therefore delivered as the top front/back centre positions.  Every mask here has
-// exactly as many bits as the layout has channels, which is what the host and the
-// converter require; the order the channels actually arrive in is the flags' own
-// ascending order, see layout_delivery().
+// 5.1's surround pair sits behind the listener (which is what the core's geometry
+// says and what "5.1" means to WAVE), while 7.1 and up have a separate side pair
+// and a rear pair.  9.1.x adds the wide pair in front.  The two 5.1.x top pairs
+// and the 7.1.x top pair sit above the listener's sides, and 9.1.6 adds the
+// top-middle pair.
 const LayoutSpec kLayouts[] = {
-    {"2.0", 2, {"L", "R"}, {kSpeakerFrontLeft, kSpeakerFrontRight}},
-    {"3.1",
-     4,
-     {"L", "R", "C", "LFE"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe}},
-    {"4.0 Surround",
-     4,
-     {"L", "R", "C", "Cs"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerBackCenter}},
-    {"4.0 Quad",
-     4,
-     {"L", "R", "Lrs", "Rrs"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerBackLeft, kSpeakerBackRight}},
-    {"5.1",
-     6,
-     {"L", "R", "C", "LFE", "Ls", "Rs"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerBackLeft, kSpeakerBackRight}},
-    {"7.1",
-     8,
-     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight}},
-    {"5.1.2",
-     8,
-     {"L", "R", "C", "LFE", "Ls", "Rs", "Ltm", "Rtm"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerSideLeft, kSpeakerSideRight, kSpeakerTopFrontLeft, kSpeakerTopFrontRight}},
-    {"5.1.4",
-     10,
-     {"L", "R", "C", "LFE", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerSideLeft, kSpeakerSideRight, kSpeakerTopFrontLeft, kSpeakerTopFrontRight,
-      kSpeakerTopBackLeft, kSpeakerTopBackRight}},
-    {"7.1.2",
-     10,
-     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltm", "Rtm"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
-      kSpeakerTopFrontLeft, kSpeakerTopFrontRight}},
-    {"7.1.4",
-     12,
-     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
-      kSpeakerTopFrontLeft, kSpeakerTopFrontRight, kSpeakerTopBackLeft,
-      kSpeakerTopBackRight}},
-    {"9.1.4",
-     14,
-     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr", "Lw",
-      "Rw"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
-      kSpeakerTopFrontLeft, kSpeakerTopFrontRight, kSpeakerTopBackLeft,
-      kSpeakerTopBackRight, kSpeakerFrontCenterLeft, kSpeakerFrontCenterRight}},
-    {"9.1.6",
-     16,
-     {"L", "R", "C", "LFE", "Lrs", "Rrs", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr", "Ltm",
-      "Rtm", "Lw", "Rw"},
-     {kSpeakerFrontLeft, kSpeakerFrontRight, kSpeakerFrontCenter, kSpeakerLfe,
-      kSpeakerBackLeft, kSpeakerBackRight, kSpeakerSideLeft, kSpeakerSideRight,
-      kSpeakerTopFrontLeft, kSpeakerTopFrontRight, kSpeakerTopBackLeft,
-      kSpeakerTopBackRight, kSpeakerTopFrontCenter, kSpeakerTopBackCenter,
-      kSpeakerFrontCenterLeft, kSpeakerFrontCenterRight}},
+    {"2.0", 2, {"L", "R"}},
+    {"3.1", 4, {"L", "R", "C", "LFE"}},
+    {"4.0", 4, {"L", "R", "Lrs", "Rrs"}},
+    {"5.1", 6, {"L", "R", "C", "LFE", "Ls", "Rs"}},
+    {"7.1", 8, {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs"}},
+    {"5.1.2", 8, {"L", "R", "C", "LFE", "Ls", "Rs", "Ltm", "Rtm"}},
+    {"5.1.4", 10, {"L", "R", "C", "LFE", "Ls", "Rs", "Ltf", "Rtf", "Ltr", "Rtr"}},
+    {"7.1.2", 10,
+     {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Ltm", "Rtm"}},
+    {"7.1.4", 12,
+     {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Ltf", "Rtf", "Ltr", "Rtr"}},
+    {"9.1.4", 14,
+     {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Lw", "Rw", "Ltf", "Rtf", "Ltr",
+      "Rtr"}},
+    {"9.1.6", 16,
+     {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Lw", "Rw", "Ltf", "Rtf", "Ltm",
+      "Rtm", "Ltr", "Rtr"}},
 };
 
 constexpr std::size_t kLayoutCount = sizeof(kLayouts) / sizeof(kLayouts[0]);
@@ -446,46 +385,6 @@ const LayoutSpec* layout_table(std::size_t* count) {
 unsigned speaker_channels(const std::string& layout) {
     const LayoutSpec* spec = find_layout(layout);
     return spec != nullptr ? spec->channels : 0;
-}
-
-bool layout_delivery(const std::string& layout, LayoutDelivery* out) {
-    const LayoutSpec* spec = find_layout(layout);
-    if (spec == nullptr || out == nullptr || spec->channels == 0 ||
-        spec->channels > kMaxLayoutChannels) {
-        return false;
-    }
-    LayoutDelivery delivery;
-    delivery.channels = spec->channels;
-    bool taken[kMaxLayoutChannels] = {};
-    for (unsigned channel = 0; channel < delivery.channels; ++channel) {
-        delivery.mask |= spec->flags[channel];
-        // The host reads the channels in the ascending order of their flags, so
-        // the channel delivered at position i is the i-th smallest flag.
-        unsigned best = delivery.channels;
-        for (unsigned candidate = 0; candidate < delivery.channels; ++candidate) {
-            if (taken[candidate]) continue;
-            if (best == delivery.channels || spec->flags[candidate] < spec->flags[best]) {
-                best = candidate;
-            }
-        }
-        delivery.order[channel] = best;
-        taken[best] = true;
-        if (best != channel) delivery.reordered = true;
-    }
-    *out = delivery;
-    return true;
-}
-
-void apply_delivery_order(const LayoutDelivery& delivery, const float* source,
-                          std::size_t frames, float* target) {
-    const std::size_t channels = delivery.channels;
-    for (std::size_t frame = 0; frame < frames; ++frame) {
-        const float* in = source + frame * channels;
-        float* out = target + frame * channels;
-        for (std::size_t channel = 0; channel < channels; ++channel) {
-            out[channel] = in[delivery.order[channel]];
-        }
-    }
 }
 
 namespace {

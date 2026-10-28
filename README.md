@@ -71,53 +71,47 @@ Preferences → Tools → **JOC 解码器**：
 页面上的控件都不禁用，状态行会说明当前生效的是什么。中文页面的控件名与上表一致，英文页面是同一些
 控件的译文（例如 **Output**、**Speaker layout**、**Binaural mode**、**HRTF file**、**Apply gain**）。
 
-### 扬声器布局与声道顺序
-
-| 布局 | 声道 | 通道掩码 | 交付顺序（声明的声道位置） |
-|---|---|---|---|
-| 2.0 | 2 | `0x3` | FL FR |
-| 3.1 | 4 | `0xF` | FL FR FC LFE |
-| 4.0 Surround | 4 | `0x107` | FL FR FC BC |
-| 4.0 Quad | 4 | `0x33` | FL FR BL BR |
-| 5.1 | 6 | `0x3F` | FL FR FC LFE BL BR |
-| 7.1 | 8 | `0x63F` | FL FR FC LFE BL BR SL SR |
-| 5.1.2 | 8 | `0x560F` | FL FR FC LFE SL SR TFL TFR |
-| 5.1.4 | 10 | `0x2D60F` | FL FR FC LFE SL SR TFL TFR TBL TBR |
-| 7.1.2 | 10 | `0x563F` | FL FR FC LFE BL BR SL SR TFL TFR |
-| 7.1.4 | 12 | `0x2D63F` | FL FR FC LFE BL BR SL SR TFL TFR TBL TBR |
-| 9.1.4 | 14 | `0x2D6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFR TBL TBR |
-| 9.1.6 | 16 | `0x3F6FF` | FL FR FC LFE BL BR FCL FCR SL SR TFL TFC TFR TBL TBC TBR |
-
-**4.0 有两个布局，它们是不同的扬声器集合，不是同一个布局的两种叫法。** **4.0 Surround** 是前置
-三声道加一只后中（`FL FR FC BC`，渲染内核里的名字是 `L R C Cs`）；**4.0 Quad** 是前后各一对
-（`FL FR BL BR`，内核里是 `L R Lrs Rrs`），既没有中置也没有 LFE——对象在正前方时由左右两只音箱
-合成幻像中置，输入里的 LFE 在这种布局下没有输出声道，按内核规则不混入其它声道。旧版本只有 `4.0`
-一个名字，含义一直是 Surround，因此读到 `4.0` 时按 `4.0 Surround` 处理（设置页显示为
-`4.0 Surround`，应用一次设置后存的就是显式名字）；要 Quad 必须写 `4.0 Quad`。
-
-渲染内核按参考实现的顺序产生声道（9.1.4 是 L R C LFE Lrs Rrs Ls Rs Ltf Rtf Ltr Rtr Lw Rw），
-而 foobar2000 规定"帧内声道顺序 = 通道掩码中声道位的升序"。两者对 2.0 到 7.1.4（含两种 4.0）恰好
-一致；9.1.4 与 9.1.6 的宽声道排在后面，所以交付前按掩码顺序重排（日志里写 `channels permuted into
-mask order`）。上表就是这个顺序；Properties 里能看到对应的 `WAVEFORMATEXTENSIBLE_CHANNEL_MASK`，
-转换器写文件时也按同一个顺序落盘。
-
-掩码取 ffmpeg 对同名布局的定义（`5.1` 是 BL/BR，`5.1.2` 起是 SL/SR，宽声道是 FCL/FCR，`4.0` 是
-FL FR FC BC），这样同一个布局名在组件、转换产物与其它工具里含义一致。**9.1.6 的顶层中间声道对
-（Ltm/Rtm）在 WAVE 的 18 个声道位里没有对应位置**（ffmpeg 用 32 位掩码之外的 TSL/TSR），因此按
-TFL/TFC/TFR/TBL/TBC/TBR 中剩下的两个居中位置 TFC 与 TBC 交付：掩码仍然是一位声道一个位，顺序如
-上表，代价是这两路在 foobar2000 的声道列表里显示为顶前排中、顶后排中。
-
-**Windows 自己只有 2.0 / 5.1 / 7.1 三种扬声器配置，其余布局（3.1、两种 4.0、所有带高度或宽声道的
-布局）的共享与独占输出都需要 ASIO（或接受该布局的独占输出）。** 高度声道、宽声道、后中与超过 8
-声道的布局 ASIO 没有限制，声道按组件交付的顺序对应到设备的输出通道（用 fb2k 的 ASIO 声道映射按名称
-分配）。用这样的布局而输出仍走系统配置时，核心会把多出来的声道下混——能听到声音，但听不到那几路；
-转换器（Converter）不受输出设备限制，可以按布局写出 4/14/16 声道的文件。设置页的状态行在选中这类
-布局时会写"需要 ASIO 输出"。
-
 ### HRTF 数据
 
 SOFA 测量集或个性化耳机模型由使用组件的人自己提供，并且写在 `.gitignore` 里，避免误提交。
 扬声器布局不需要 HRTF。双耳渲染缺少 HRTF 时会报错并指出它找的是哪个文件。
+
+## 扬声器布局与声道顺序
+
+组件交给 foobar2000 的 PCM 与转换器写出的多声道 WAV 都按渲染内核的声道顺序排列：
+
+| 布局 | 声道顺序 |
+|---|---|
+| 2.0 | L, R |
+| 3.1 | L, R, C, LFE |
+| 4.0 | L, R, Lrs, Rrs |
+| 5.1 | L, R, C, LFE, Ls, Rs |
+| 7.1 | L, R, C, LFE, Ls, Rs, Lrs, Rrs |
+| 5.1.2 | L, R, C, LFE, Ls, Rs, Ltm, Rtm |
+| 5.1.4 | L, R, C, LFE, Ls, Rs, Ltf, Rtf, Ltr, Rtr |
+| 7.1.2 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Ltm, Rtm |
+| 7.1.4 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Ltf, Rtf, Ltr, Rtr |
+| 9.1.4 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Lw, Rw, Ltf, Rtf, Ltr, Rtr |
+| 9.1.6 | L, R, C, LFE, Ls, Rs, Lrs, Rrs, Lw, Rw, Ltf, Rtf, Ltm, Rtm, Ltr, Rtr |
+
+`4.0` 是本项目补充的 Quad 布局（传统 Quad 的 `FL FR BL BR`），声道为 `L R Lrs Rrs`：前后各一对，
+既没有中置也没有 LFE——对象在正前方时由左右两只音箱合成幻像中置，输入里的 LFE 在这种布局下没有
+输出声道，按内核规则不混入其它声道。除 `4.0` 外，其余布局及声道顺序均依据杜比相关规范定义。
+
+**声道顺序与 foobar2000 的限制。** 组件把渲染内核的 PCM 原样交出，声道顺序就是上表；写进 WAV 时
+（播放的 chunk 或转换器的产物），这 1–16 个声道的排列顺序与杜比规范严格对应。但 foobar2000 的
+WAVE 写出只能用一套 Windows 扬声器掩码，它没有 `Ts`（top middle）和 `Ww`（wide）的位置，也无法
+表达 7.1 `Ls Rs Lrs Rrs` 这种顺序，所以**声道的定义（掩码/扬声器位置）不保证完全对应**——这是
+foobar2000 的限制，不是渲染顺序的问题。Properties 只声明声道数、不声明位置；播放时 chunk 携带
+foobar2000 对该声道数的默认映射（未指定掩码会被判“无效的音频流规范”，播放直接失败）。
+
+需要 `dwChannelMask = 0` 的多声道 WAV 时，请自行到
+[github.com/TheM14/JustOneCacophony](https://github.com/TheM14/JustOneCacophony) 下载对应的 CLI
+程序导出：它写 `WAVE_FORMAT_EXTENSIBLE` + `dwChannelMask = 0`，声道顺序同上表。
+
+播放器、ASIO、DAW 或设备的输出映射要按声道编号自行完成；组件保证各 PCM 声道的内容和编号符合上表。
+
+配置里的布局名按上表读取；无法识别的名字会记一条日志并回落到 `7.1`。
 
 ## 构建
 
@@ -142,9 +136,10 @@ pwsh -File tools/package.ps1            # 两个架构，打包到 dist\*.fb2k-c
 ## 已知限制
 
 * 不实现 ADM BWF 输出。
-* 扬声器布局到 9.1.6（16 声道）为止；内核输出上限就是 16 声道，没有 22.2。2.0/5.1/7.1 之外的
-  布局需要 ASIO（或接受该布局的独占输出），见[扬声器布局与声道顺序](#扬声器布局与声道顺序)。
-* 9.1.6 的顶层中间声道对在 WAVE 的声道位里没有对应位置，按 TFC/TBC 交付（同上）。
+* 扬声器布局到 9.1.6（16 声道）为止；内核输出上限就是 16 声道，没有 22.2，见
+  [扬声器布局与声道顺序](#扬声器布局与声道顺序)。
+* 多声道布局在 Properties 里不声明扬声器位置，播放时的块内映射只是 foobar2000 对该声道数的
+  默认值；输出映射要按声道编号自行完成（同上）。
 * $joc\_dmx\_config\_idx$ 全部五个档位都支持：取床按音频帧配对，床通道数由档位决定（0/3
   为 6 通道，1/2/4 为 8 通道），ffmpeg 只在 6 通道档位传 `-ac 6`。AC-3 核心 + 依赖子流
   （`strmtyp=1`）与"首个音频帧没有 JOC"都按正常情况处理。

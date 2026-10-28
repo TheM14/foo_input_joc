@@ -4,7 +4,7 @@
 //   ui_text_fit_test <path to foo_input_joc.dll>
 //
 // The page is bilingual, and the wider language is not always the translated one:
-// "4.0 Surround" does not fit where "4.0" did.  This check creates the dialog from
+// the English label is sometimes the longer one.  This check creates the dialog from
 // the component's own resource (the same way the component does), then measures
 // each string with the control's own font and compares it with the space that
 // control has.  Multi-line static controls are wrapped at word boundaries, so a
@@ -174,10 +174,6 @@ std::size_t index_of(joc_lang::Text text) {
     return static_cast<std::size_t>(-1);
 }
 
-bool windows_speaker_config(unsigned mask) {
-    return mask == 0x3u || mask == 0x3Fu || mask == 0x63Fu;
-}
-
 void check_control(Measurer& measurer, HWND dialog, const Binding& binding,
                    const std::string& language) {
     HWND control = GetDlgItem(dialog, binding.control);
@@ -257,10 +253,9 @@ void check_combo(Measurer& measurer, HWND control, const std::string& language,
     }
 }
 
-std::string format(const char* pattern, const char* layout, unsigned channels,
-                   const char* suffix) {
+std::string format(const char* pattern, const char* layout) {
     char buffer[256] = {};
-    std::snprintf(buffer, sizeof(buffer), pattern, layout, channels, suffix);
+    std::snprintf(buffer, sizeof(buffer), pattern, layout);
     return buffer;
 }
 
@@ -347,16 +342,9 @@ int main(int argc, char** argv) {
         // Status lines the page writes at run time.
         const HWND output_status = GetDlgItem(dialog, IDC_LABEL_OUTPUT_STATUS);
         for (std::size_t i = 0; i < layout_count; ++i) {
-            joc_decode::LayoutDelivery delivery;
-            const bool plain =
-                joc_decode::layout_delivery(layouts[i].name, &delivery) &&
-                windows_speaker_config(delivery.mask);
             check_line(measurer, output_status, language,
                        format(joc_lang::get(resolved, joc_lang::Text::kSpeakerStatus),
-                              layouts[i].name, layouts[i].channels,
-                              plain ? ""
-                                    : joc_lang::get(resolved,
-                                                    joc_lang::Text::kSpeakerStatusAsio)));
+                              layouts[i].name));
         }
         // The page shortens the path line before it is shown, so only the two-line
         // envelope of the status field is measured: the label, and the longest text
