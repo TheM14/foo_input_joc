@@ -230,6 +230,7 @@
     <ClInclude Include="src\foundation\fft.h" />
     <ClInclude Include="src\foundation\fs_utf8.h" />
     <ClInclude Include="src\foundation\geometry.h" />
+    <ClInclude Include="src\foundation\metadata_timing.h" />
     <ClInclude Include="src\foundation\mini_json.h" />
     <ClInclude Include="src\foundation\py_num.h" />
     <ClInclude Include="src\foundation\sha256.h" />
