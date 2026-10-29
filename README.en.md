@@ -169,8 +169,8 @@ every container in the library, which is where the volume comes from.
 ## Known limitations
 
 * ADM BWF output is not implemented.
-* Speaker layouts go up to 9.1.6 (16 channels), which is the renderer's own limit — there is no
-  22.2, see [Speaker layouts and channel order](#speaker-layouts-and-channel-order).
+* Speaker layouts go up to 9.1.6 (16 channels), the renderer's own output limit; see
+  [Speaker layouts and channel order](#speaker-layouts-and-channel-order).
 * A multichannel layout declares no speaker positions in Properties, and the per-chunk map used for
   playback is only foobar2000's default for the channel count; output mapping is up to the user's
   channel assignment (same section).

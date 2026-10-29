@@ -175,6 +175,7 @@
     <ClCompile Include="src\io\process.cpp" />
     <ClCompile Include="src\io\wav_writer.cpp" />
     <ClCompile Include="src\io\zip_reader.cpp" />
+    <ClCompile Include="src\joc_bitstream\bed_layout_map.cpp" />
     <ClCompile Include="src\joc_bitstream\joc_parser.cpp" />
     <ClCompile Include="src\joc_core\objects16.cpp" />
     <ClCompile Include="src\oamd\oamd_parser.cpp" />
@@ -250,6 +251,7 @@
     <ClInclude Include="src\io\process.h" />
     <ClInclude Include="src\io\wav_writer.h" />
     <ClInclude Include="src\io\zip_reader.h" />
+    <ClInclude Include="src\joc_bitstream\bed_layout_map.h" />
     <ClInclude Include="src\joc_bitstream\joc_huffman_tables.h" />
     <ClInclude Include="src\joc_bitstream\joc_parser.h" />
     <ClInclude Include="src\joc_core\objects16.h" />
