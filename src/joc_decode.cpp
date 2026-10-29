@@ -1108,9 +1108,10 @@ bool Engine::seek(double seconds, double total_seconds, std::string* error) {
         impl.delivered = 0;
     }
 
-    // joc_stream_reset keeps the renderer and its HRTF field: it drops the whole
-    // timeline, gain ramps, room tail and filter-bank history, which is exactly
-    // what a restart at another position needs.
+    // joc_stream_reset keeps the renderer and its HRTF field: it drops the timeline
+    // state, gain ramps, room tail and filter-bank history, which is exactly what a
+    // restart at another position needs.  The fixed bed positions survive: they
+    // describe the content, not the playback position.
     const joc_error reset = impl.api.reset(impl.stream);
     if (reset != JOC_OK) {
         if (error != nullptr) {
