@@ -161,6 +161,8 @@
     <ClCompile Include="src\foundation\status.cpp" />
     <ClCompile Include="src\hrtf\jochrtf.cpp" />
     <ClCompile Include="src\hrtf\public_filterbank.cpp" />
+    <ClCompile Include="src\hrtf\rosella_bank.cpp" />
+    <ClCompile Include="src\hrtf\rosella_filterbank.cpp" />
     <ClCompile Include="src\hrtf\rosella_model.cpp" />
     <ClCompile Include="src\hrtf\rosella_renderer.cpp" />
     <ClCompile Include="src\hrtf\kernel_tables.cpp" />
@@ -238,6 +240,9 @@
     <ClInclude Include="src\foundation\status.h" />
     <ClInclude Include="src\hrtf\jochrtf.h" />
     <ClInclude Include="src\hrtf\public_filterbank.h" />
+    <ClInclude Include="src\hrtf\rosella_bank.h" />
+    <ClInclude Include="src\hrtf\rosella_filterbank.h" />
+    <ClInclude Include="src\hrtf\rosella_filterbank_tables.h" />
     <ClInclude Include="src\hrtf\rosella_model.h" />
     <ClInclude Include="src\hrtf\rosella_renderer.h" />
     <ClInclude Include="src\hrtf\sofa.h" />
