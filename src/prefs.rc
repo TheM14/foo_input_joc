@@ -39,14 +39,11 @@ BEGIN
     LTEXT           "切换后需刷新文件信息", IDC_LABEL_INT24_HINT, 176, 65, 136, 10
 
     GROUPBOX        "HRTF", IDC_GROUP_HRTF, 7, 79, 316, 92
-    CONTROL         "SOFA 文件", IDC_RADIO_HRTF_SOFA, "Button",
-                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 16, 91, 50, 10
-    CONTROL         "Rosella 个性化模型", IDC_RADIO_HRTF_ROSELLA, "Button",
-                    BS_AUTORADIOBUTTON | WS_TABSTOP, 70, 91, 146, 10
+    LTEXT           "Rosella 个性化模型", IDC_RADIO_HRTF_ROSELLA, 16, 91, 146, 10
     LTEXT           "HRTF 文件", IDC_LABEL_HRTF, 16, 106, 40, 10
     EDITTEXT        IDC_EDIT_HRTF, 58, 103, 186, 13, ES_AUTOHSCROLL
     PUSHBUTTON      "浏览…", IDC_BROWSE_HRTF, 248, 103, 52, 13
-    LTEXT           "留空时读组件目录下 HRTF\\binaural.sofa 或 HRTF\\binaural.personalized_headphone。",
+    LTEXT           "留空时读组件目录下 HRTF\\binaural.personalized_headphone。",
                     IDC_LABEL_HRTF_HINT, 16, 121, 300, 20
     LTEXT           "", IDC_LABEL_STATUS, 16, 143, 300, 20
 

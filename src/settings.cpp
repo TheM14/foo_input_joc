@@ -24,7 +24,6 @@ constexpr GUID kGuidLayout = {0x7b62e5d1, 0x14a8, 0x4c07, {0x83, 0x2f, 0x6b, 0x9
 // Reused from the previous build, where it stored the .jochrtf path: it still
 // holds "the HRTF file", so the meaning is unchanged for anyone upgrading.
 constexpr GUID kGuidHrtfFile = {0x4e8a1f36, 0x2c95, 0x47d0, {0xb1, 0x68, 0x3e, 0xa2, 0x77, 0x09, 0xf5, 0x8c}};
-constexpr GUID kGuidHrtfSource = {0xa3d51b72, 0x6f48, 0x4c19, {0x9e, 0x04, 0x2b, 0x87, 0xd1, 0x53, 0x6a, 0x20}};
 constexpr GUID kGuidBinauralMode = {0x1a57c9e4, 0x83b6, 0x42f1, {0x9c, 0x50, 0x24, 0xfd, 0x6a, 0x18, 0x73, 0x0e}};
 constexpr GUID kGuidGainEnabled = {0x74b1e5c8, 0x2a39, 0x4d16, {0x8f, 0x62, 0x0d, 0x51, 0xb7, 0x3c, 0x9a, 0x28}};
 constexpr GUID kGuidGain = {0x6c04d8b2, 0xe75f, 0x4a39, {0x8d, 0x26, 0x51, 0xb3, 0xc8, 0x40, 0x9e, 0x27}};
@@ -37,7 +36,6 @@ constexpr GUID kGuidLanguage = {0x58e17a04, 0x3d92, 0x4f6b, {0xa1, 0x27, 0x94, 0
 cfg_uint g_output(kGuidOutput, 0);
 cfg_string g_layout(kGuidLayout, "7.1");
 // 0 = SOFA, 1 = Rosella model, 2 = compiled .jochrtf (advanced)
-cfg_uint g_hrtf_source(kGuidHrtfSource, 0);
 cfg_string g_hrtf_file(kGuidHrtfFile, "");
 cfg_uint g_binaural_mode(kGuidBinauralMode, 3);
 cfg_bool g_gain_enabled(kGuidGainEnabled, true);
@@ -99,18 +97,7 @@ bool env_string(const char* name, std::string* out) {
 
 namespace joc_settings {
 
-const char* hrtf_source_name(HrtfSource source) {
-    return source == HrtfSource::kRosella ? "Rosella 个性化模型" : "SOFA";
-}
-
-const char* hrtf_source_extension(HrtfSource source) {
-    return source == HrtfSource::kRosella ? "personalized_headphone" : "sofa";
-}
-
-const char* hrtf_default_file_name(HrtfSource source) {
-    return source == HrtfSource::kRosella ? "binaural.personalized_headphone"
-                                         : "binaural.sofa";
-}
+const char* hrtf_default_file_name() { return "binaural.personalized_headphone"; }
 
 Values defaults() { return Values(); }
 
@@ -131,8 +118,6 @@ Values read() {
         }
         values.speaker_layout = "7.1";
     }
-    const unsigned source = static_cast<unsigned>(g_hrtf_source);
-    values.hrtf_source = (source == 1u) ? HrtfSource::kRosella : HrtfSource::kSofa;
     values.hrtf_file = g_hrtf_file.get_ptr();
     values.binaural_mode = static_cast<unsigned>(g_binaural_mode);
     values.gain_enabled = static_cast<bool>(g_gain_enabled);
@@ -162,7 +147,6 @@ Values read() {
 void write(const Values& values) {
     g_output = static_cast<unsigned>(values.output);
     g_layout = values.speaker_layout.c_str();
-    g_hrtf_source = static_cast<unsigned>(values.hrtf_source);
     g_hrtf_file = values.hrtf_file.c_str();
     g_binaural_mode = values.binaural_mode;
     g_gain_enabled = values.gain_enabled;
@@ -182,9 +166,6 @@ joc_decode::Settings current() {
     if (env_string("JOC_OUTPUT", &text)) values.output = (text == "speaker") ? 1 : 0;
     if (env_string("JOC_LAYOUT", &text)) values.speaker_layout = text;
     (void)env_string("JOC_HRTF", &values.hrtf_file);
-    if (env_string("JOC_HRTF_SOURCE", &text)) {
-        values.hrtf_source = (text == "rosella") ? HrtfSource::kRosella : HrtfSource::kSofa;
-    }
     (void)env_string("JOC_FFMPEG", &values.ffmpeg_path);
     if (env_string("JOC_BINAURAL_MODE", &text)) {
         values.binaural_mode = (text == "near") ? 1u : (text == "far") ? 2u : 3u;
@@ -200,7 +181,6 @@ joc_decode::Settings current() {
     settings.output =
         (values.output == 0) ? joc_decode::Output::kBinaural : joc_decode::Output::kSpeaker;
     settings.speaker_layout = values.speaker_layout;
-    settings.hrtf_source = static_cast<joc_decode::HrtfSource>(values.hrtf_source);
     settings.hrtf_file = values.hrtf_file;
     settings.binaural_mode = values.binaural_mode;
     // The switch is explicit rather than implied by the value: binaural rendering
@@ -219,9 +199,8 @@ std::string describe(const joc_decode::Settings& settings) {
     char text[640] = {};
     if (settings.output == joc_decode::Output::kBinaural) {
         std::snprintf(text, sizeof(text),
-                      "binaural, hrtf=%s(%s), mode=%u, gain=%.2f dB, tail=%.2f s, delay=%u, "
+                      "binaural, hrtf=%s, mode=%u, gain=%.2f dB, tail=%.2f s, delay=%u, "
                       "threads=%u, ffmpeg=%s",
-                      hrtf_source_name(static_cast<HrtfSource>(settings.hrtf_source)),
                       settings.hrtf_file.empty() ? "(默认位置)" : settings.hrtf_file.c_str(),
                       settings.binaural_mode, settings.gain_db, settings.tail_seconds,
                       settings.object_delay_samples, settings.native_threads,
@@ -244,10 +223,9 @@ std::string describe(const joc_decode::Settings& settings) {
 std::string describe(const Values& values) {
     char text[640] = {};
     std::snprintf(text, sizeof(text),
-                  "output=%d layout=%s hrtf=%s(%s) mode=%u gain=%s%.2f dB tail=%.2f s delay=%u "
+                  "output=%d layout=%s hrtf=%s mode=%u gain=%s%.2f dB tail=%.2f s delay=%u "
                   "threads=%u ffmpeg=\"%s\"",
-                  values.output, values.speaker_layout.c_str(),
-                  hrtf_source_name(values.hrtf_source), values.hrtf_file.c_str(),
+                  values.output, values.speaker_layout.c_str(), values.hrtf_file.c_str(),
                   values.binaural_mode, values.gain_enabled ? "" : "(off) ", values.gain_db,
                   values.tail_seconds, values.object_delay_samples, values.native_threads,
                   values.ffmpeg_path.c_str());

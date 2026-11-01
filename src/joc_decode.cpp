@@ -455,9 +455,7 @@ std::string resolve_hrtf_file(const Settings& settings) {
     if (directory.empty()) return {};
     // Same convention as the reference CLI next to its executable:
     // <base>\HRTF\binaural.sofa or <base>\HRTF\binaural.personalized_headphone.
-    const char* name = (settings.hrtf_source == HrtfSource::kRosella)
-                           ? "binaural.personalized_headphone"
-                           : "binaural.sofa";
+    const char* name = "binaural.personalized_headphone";
     return directory + "\\HRTF\\" + name;
 }
 
@@ -1012,16 +1010,8 @@ bool Engine::start(const std::string& input_path, const Settings& settings, std:
             }
             return false;
         }
-        if (settings.hrtf_source == HrtfSource::kRosella) {
-            config.personalized_headphone_path = hrtf_file.c_str();
-        } else {
-            config.hrtf_sofa_path = hrtf_file.c_str();
-        }
+        config.personalized_headphone_path = hrtf_file.c_str();
     }
-    config.hrtf_cache_policy = settings.hrtf_cache_policy;
-    config.hrtf_cache_dir =
-        settings.hrtf_cache_dir.empty() ? nullptr : settings.hrtf_cache_dir.c_str();
-    config.hrtf_radius_m = settings.hrtf_radius_m;
     config.binaural_tail_seconds = settings.tail_seconds;
     config.object_delay_samples = settings.object_delay_samples;
     config.gain_db = settings.gain_db;

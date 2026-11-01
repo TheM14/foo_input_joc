@@ -28,7 +28,7 @@
 
 #include "adm/adm_metadata.h"
 #include "adm/adm_tracks.h"
-#include "binaural/binaural_runtime.h"
+#include "binaural/jochrtf_runtime.h"
 #include "eac3_transport/eac3_reader.h"
 #include "emdf/emdf_parser.h"
 #include "foundation/mini_json.h"
@@ -37,7 +37,6 @@
 #include "hrtf/rosella_bank.h"
 #include "hrtf/rosella_model.h"
 #include "hrtf/rosella_renderer.h"
-#include "hrtf/sofa_cache.h"
 #include "io/adm_writer.h"
 #include "io/process.h"
 #include "io/wav_writer.h"
@@ -94,11 +93,8 @@ struct Settings {
     std::string layout;
     std::string hrtf_path;
     std::string kernels_path;
-    std::string hrtf_sofa_path;
     std::string personalized_headphone_path;
-    std::string hrtf_cache_dir;
-    std::uint32_t hrtf_cache_policy = JOC_HRTF_CACHE_MEMORY;
-    double hrtf_radius_m = 1.0;
+    std::uint32_t jochrtf_room = 1;
     std::uint32_t rosella_filterbank = JOC_ROSELLA_FILTERBANK_PUBLIC;
     std::uint32_t operation = JOC_OP_ADM_BWF;
     std::uint32_t output_format = JOC_FORMAT_FLOAT32;
@@ -144,13 +140,10 @@ Settings normalise(const joc_task_config& raw) {
     if (raw.output_path != nullptr) { cfg.output_path = raw.output_path; }
     if (raw.speaker_layout_name != nullptr) { cfg.layout = raw.speaker_layout_name; }
     if (raw.hrtf_path != nullptr) { cfg.hrtf_path = raw.hrtf_path; }
-    if (raw.hrtf_sofa_path != nullptr) { cfg.hrtf_sofa_path = raw.hrtf_sofa_path; }
     if (raw.personalized_headphone_path != nullptr) {
         cfg.personalized_headphone_path = raw.personalized_headphone_path;
     }
-    if (raw.hrtf_cache_dir != nullptr) { cfg.hrtf_cache_dir = raw.hrtf_cache_dir; }
-    cfg.hrtf_cache_policy = raw.hrtf_cache_policy;
-    cfg.hrtf_radius_m = raw.hrtf_radius_m;
+    cfg.jochrtf_room = raw.jochrtf_room;
     // Kept verbatim so validate() can reject an out-of-range value; 0 is the
     // documented "unset" spelling of the public bank.
     cfg.rosella_filterbank = raw.rosella_filterbank;
@@ -1074,35 +1067,16 @@ Status validate(const joc_task_config& raw, std::vector<joc_validation_issue>* i
         }
     }
     if (cfg.operation == JOC_OP_BINAURAL) {
-        if (cfg.hrtf_path.empty() && cfg.hrtf_sofa_path.empty() &&
-            cfg.personalized_headphone_path.empty()) {
+        if (cfg.hrtf_path.empty() && cfg.personalized_headphone_path.empty()) {
             fail(JOC_ERR_INVALID_CONFIG, "hrtf_path",
-                 "a SOFA input, a Rosella model or a compiled HRTF (.jochrtf) is required for the "
+                 "a Rosella model or a compiled HRTF (.jochrtf) is required for the "
                  "binaural operation");
         } else if (!cfg.personalized_headphone_path.empty() &&
                    !fs_utf8::exists(cfg.personalized_headphone_path)) {
             fail(JOC_ERR_HRTF_NOT_FOUND, "personalized_headphone_path",
                  "personalized headphone model not found: " + cfg.personalized_headphone_path);
-        } else if (!cfg.hrtf_sofa_path.empty() && !fs_utf8::exists(cfg.hrtf_sofa_path)) {
-            fail(JOC_ERR_HRTF_NOT_FOUND, "hrtf_sofa_path",
-                 "SOFA HRTF not found: " + cfg.hrtf_sofa_path);
-        } else if (cfg.hrtf_sofa_path.empty() && cfg.personalized_headphone_path.empty() &&
-                   !fs_utf8::exists(cfg.hrtf_path)) {
+        } else if (cfg.personalized_headphone_path.empty() && !fs_utf8::exists(cfg.hrtf_path)) {
             fail(JOC_ERR_HRTF_NOT_FOUND, "hrtf_path", "HRTF cache not found: " + cfg.hrtf_path);
-        }
-        if (!cfg.hrtf_sofa_path.empty()) {
-            if (cfg.hrtf_cache_policy > JOC_HRTF_CACHE_DISK) {
-                fail(JOC_ERR_INVALID_CONFIG, "hrtf_cache_policy",
-                     "hrtf_cache_policy must be none, memory or disk");
-            }
-            if (cfg.hrtf_cache_policy == JOC_HRTF_CACHE_DISK && cfg.hrtf_cache_dir.empty()) {
-                fail(JOC_ERR_INVALID_CONFIG, "hrtf_cache_dir",
-                     "the disk cache policy needs a cache directory");
-            }
-            if (!std::isfinite(cfg.hrtf_radius_m) || cfg.hrtf_radius_m <= 0.0) {
-                fail(JOC_ERR_INVALID_CONFIG, "hrtf_radius_m",
-                     "hrtf_radius_m must be positive and finite");
-            }
         }
         // The filterbank tables are compiled in; a path is only a verification override.
         if (!cfg.kernels_path.empty() && !fs_utf8::exists(cfg.kernels_path)) {
@@ -1354,7 +1328,7 @@ Status run(const joc_task_config& raw, const joc_event_sink* sink, joc_task_resu
                      speaker.layout.channel_count));
     }
 
-    ::joc::binaural::SofaBinauralRuntime binaural;
+    ::joc::binaural::JochrtfRuntime binaural;
     ::joc::hrtf::RosellaRuntime rosella;
     const bool binaural_enabled = cfg.operation == JOC_OP_BINAURAL;
     const bool rosella_enabled = !cfg.personalized_headphone_path.empty();
@@ -1398,30 +1372,10 @@ Status run(const joc_task_config& raw, const joc_event_sink* sink, joc_task_resu
         ::joc::hrtf::Kernels kernels;
         ::joc::binaural::Profile profile = ::joc::binaural::Profile::Mid;
         Status status = Status::success();
-        if (!cfg.hrtf_sofa_path.empty()) {
-            // The .jochrtf is an internal cache: the SOFA is the user-facing input.
-            ::joc::hrtf::SofaFieldRequest request;
-            request.sofa_path = cfg.hrtf_sofa_path;
-            request.options.shell_radius_m = cfg.hrtf_radius_m;
-            request.cache_dir = cfg.hrtf_cache_dir;
-            switch (cfg.hrtf_cache_policy) {
-                case JOC_HRTF_CACHE_NONE: request.policy = ::joc::hrtf::CachePolicy::None; break;
-                case JOC_HRTF_CACHE_DISK: request.policy = ::joc::hrtf::CachePolicy::Disk; break;
-                default: request.policy = ::joc::hrtf::CachePolicy::Memory; break;
-            }
-            std::string cache_path;
-            status = ::joc::hrtf::load_or_compile_sofa_field(request, &field, &cache_path);
-            if (status.ok()) {
-                bus.emit(JOC_EV_HRTF_LOADED, JOC_STAGE_RENDER, JOC_LOG_INFO,
-                         "SOFA HRTF compiled: " + field.source_sha256.substr(0, 16) +
-                             (cache_path.empty() ? std::string() : " -> " + cache_path));
-            }
-        } else {
-            status = ::joc::hrtf::load_jochrtf(cfg.hrtf_path, &field);
-            if (status.ok()) {
-                bus.emit(JOC_EV_HRTF_LOADED, JOC_STAGE_RENDER, JOC_LOG_INFO,
-                         "compiled HRTF: " + field.source_sha256.substr(0, 16));
-            }
+        status = ::joc::hrtf::load_jochrtf(cfg.hrtf_path, &field);
+        if (status.ok()) {
+            bus.emit(JOC_EV_HRTF_LOADED, JOC_STAGE_RENDER, JOC_LOG_INFO,
+                     "compiled HRTF: " + field.source_sha256.substr(0, 16));
         }
         if (status.ok()) {
             status = cfg.kernels_path.empty()
@@ -1434,7 +1388,10 @@ Status run(const joc_task_config& raw, const joc_event_sink* sink, joc_task_resu
             profile = ::joc::binaural::Profile::Far;
         }
         if (status.ok()) {
-            status = binaural.open(field, kernels, profile);
+            ::joc::binaural::RoomConstants room;
+            room.enable_early_reflections = cfg.jochrtf_room ? 1u : 0u;
+            room.enable_late_room = room.enable_early_reflections;
+            status = binaural.open(field, kernels, profile, room);
         }
         if (!status.ok()) {
             return finalize_with_error(status.code(), "render",

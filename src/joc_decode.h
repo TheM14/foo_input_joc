@@ -44,13 +44,6 @@ enum class Output {
     kSpeaker = 1,   // N channels, named layout
 };
 
-// Which HRTF to render with.  Both inputs are user-facing model/data files; how
-// the renderer gets from them to its internal filter field is its own business.
-enum class HrtfSource {
-    kSofa = 0,
-    kRosella = 1,
-};
-
 // Where the E-AC-3 syncframes come from.  A bare stream is read straight from the
 // file; inside a container the track has to be extracted first (ffmpeg, stream copy).
 enum class InputKind {
@@ -64,12 +57,8 @@ struct Settings {
     // Which of the container's audio tracks holds the E-AC-3 stream, 0-based.
     unsigned audio_index = 0;
     std::string speaker_layout = "7.1";
-    HrtfSource hrtf_source = HrtfSource::kSofa;
     // Empty means the default file in the default folder, see resolve_hrtf_file().
     std::string hrtf_file;
-    std::string hrtf_cache_dir;       // SOFA compile cache (disk policy)
-    unsigned hrtf_cache_policy = 1;   // 0 none, 1 memory, 2 disk
-    double hrtf_radius_m = 1.0;       // SOFA measurement-radius shell
     std::uint32_t binaural_mode = 3;  // JOC_BINAURAL_MID
     double gain_db = 0.0;
     double tail_seconds = 5.0;

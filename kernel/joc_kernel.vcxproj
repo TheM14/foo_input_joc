@@ -149,8 +149,8 @@
     <!-- Engine internals (JOC_INTERNAL_SOURCES). -->
     <ClCompile Include="src\adm\adm_metadata.cpp" />
     <ClCompile Include="src\adm\adm_tracks.cpp" />
-    <ClCompile Include="src\binaural\binaural_runtime.cpp" />
-    <ClCompile Include="src\binaural\sofa_binaural_renderer.cpp" />
+    <ClCompile Include="src\binaural\jochrtf_runtime.cpp" />
+    <ClCompile Include="src\binaural\jochrtf_renderer.cpp" />
     <ClCompile Include="src\eac3_transport\eac3_reader.cpp" />
     <ClCompile Include="src\emdf\emdf_parser.cpp" />
     <ClCompile Include="src\foundation\bit_reader.cpp" />
@@ -166,9 +166,6 @@
     <ClCompile Include="src\hrtf\rosella_model.cpp" />
     <ClCompile Include="src\hrtf\rosella_renderer.cpp" />
     <ClCompile Include="src\hrtf\kernel_tables.cpp" />
-    <ClCompile Include="src\hrtf\sofa.cpp" />
-    <ClCompile Include="src\hrtf\sofa_cache.cpp" />
-    <ClCompile Include="src\hrtf\sofa_field.cpp" />
     <ClCompile Include="src\io\adm_writer.cpp" />
     <ClCompile Include="src\io\hdf5.cpp" />
     <ClCompile Include="src\io\inflate.cpp" />
@@ -226,7 +223,7 @@
     <ClInclude Include="include\joc_version.h" />
     <ClInclude Include="src\adm\adm_metadata.h" />
     <ClInclude Include="src\adm\adm_tracks.h" />
-    <ClInclude Include="src\binaural\binaural_runtime.h" />
+    <ClInclude Include="src\binaural\jochrtf_runtime.h" />
     <ClInclude Include="src\eac3_transport\eac3_reader.h" />
     <ClInclude Include="src\emdf\emdf_parser.h" />
     <ClInclude Include="src\foundation\bit_reader.h" />
@@ -245,9 +242,6 @@
     <ClInclude Include="src\hrtf\rosella_filterbank_tables.h" />
     <ClInclude Include="src\hrtf\rosella_model.h" />
     <ClInclude Include="src\hrtf\rosella_renderer.h" />
-    <ClInclude Include="src\hrtf\sofa.h" />
-    <ClInclude Include="src\hrtf\sofa_cache.h" />
-    <ClInclude Include="src\hrtf\sofa_field.h" />
     <ClInclude Include="src\io\adm_writer.h" />
     <ClInclude Include="src\io\hdf5.h" />
     <ClInclude Include="src\io\inflate.h" />

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "binaural/binaural_runtime.h"
+#include "binaural/jochrtf_runtime.h"
 #include "eac3_transport/eac3_reader.h"
 #include "foundation/status.h"
 #include "hrtf/rosella_renderer.h"
@@ -30,13 +30,10 @@ struct Config {
     std::uint32_t object_delay_samples = 1473;
     double gain_db = 0.0;
     std::uint32_t native_threads = 0;
-    // The three HRTF shapes of joc_task_config, in its precedence order: a Rosella
-    // model wins over a SOFA, and hrtf_path (.jochrtf) is the fallback.
-    std::string hrtf_sofa_path;
+    // Binaural inputs of joc_task_config: a Rosella model wins over hrtf_path
+    // (.jochrtf).
     std::string personalized_headphone_path;
-    std::string hrtf_cache_dir;
-    std::uint32_t hrtf_cache_policy = JOC_HRTF_CACHE_MEMORY;
-    double hrtf_radius_m = 1.0;
+    std::uint32_t jochrtf_room = 1;
     // Filterbank of the Rosella path; the other binaural inputs ignore it.
     std::uint32_t rosella_filterbank = JOC_ROSELLA_FILTERBANK_PUBLIC;
 };
@@ -170,7 +167,7 @@ private:
 
     ejoc_renderer_handle rebuilder_ = nullptr;
     speaker::SpeakerStep speaker_;
-    binaural::SofaBinauralRuntime binaural_;
+    binaural::JochrtfRuntime binaural_;
     hrtf::RosellaRuntime rosella_;
     std::vector<double> rosella_pending_;
     std::size_t rosella_read_offset_ = 0;

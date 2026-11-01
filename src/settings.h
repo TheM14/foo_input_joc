@@ -17,24 +17,14 @@
 
 namespace joc_settings {
 
-// Which HRTF the binaural renderer uses.  Only these two inputs exist: everything
-// else (compiling a SOFA into the renderer's field, caching it) is internal.
-enum class HrtfSource {
-    kSofa = 0,     // SOFA SimpleFreeFieldHRIR, compiled by the renderer
-    kRosella = 1,  // Rosella .personalized_headphone model
-};
-
-const char* hrtf_source_name(HrtfSource source);
-const char* hrtf_source_extension(HrtfSource source);
 // The file looked up in the default folder (next to the component) when no path
-// is configured; same names the reference CLI uses.
-const char* hrtf_default_file_name(HrtfSource source);
+// is configured; same name the reference CLI uses.
+const char* hrtf_default_file_name();
 
 // The stored values, exactly as the preferences page shows them.
 struct Values {
     int output = 0;                   // 0 = binaural, 1 = speaker layout
     std::string speaker_layout = "7.1";
-    HrtfSource hrtf_source = HrtfSource::kSofa;
     // Empty means "the default file in the default folder".
     std::string hrtf_file;
     unsigned binaural_mode = 3;       // JOC_BINAURAL_NEAR/FAR/MID = 1/2/3

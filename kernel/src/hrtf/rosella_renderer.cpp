@@ -1343,7 +1343,7 @@ void RosellaRuntime::take_output(std::vector<double>* out) {
     if (out == nullptr) {
         return;
     }
-    // Replace semantics, exactly like SofaBinauralRuntime::take_output: the caller's
+    // Replace semantics, exactly like JochrtfRuntime::take_output: the caller's
     // previous contents are discarded, and the internal buffer is emptied afterwards
     // because the swap leaves it holding whatever the caller had.
     out->swap(impl_->output);

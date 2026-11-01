@@ -404,10 +404,6 @@ private:
     void load_values(const joc_settings::Values& values) {
         CheckRadioButton(m_hwnd, IDC_RADIO_BINAURAL, IDC_RADIO_SPEAKER,
                          values.output == 0 ? IDC_RADIO_BINAURAL : IDC_RADIO_SPEAKER);
-        CheckRadioButton(m_hwnd, IDC_RADIO_HRTF_SOFA, IDC_RADIO_HRTF_ROSELLA,
-                         values.hrtf_source == joc_settings::HrtfSource::kRosella
-                             ? IDC_RADIO_HRTF_ROSELLA
-                             : IDC_RADIO_HRTF_SOFA);
 
         set_text(GetDlgItem(m_hwnd, IDC_EDIT_HRTF), values.hrtf_file);
         set_text(GetDlgItem(m_hwnd, IDC_EDIT_FFMPEG), values.ffmpeg_path);
@@ -464,9 +460,6 @@ private:
             static_cast<int>(SendDlgItemMessageW(m_hwnd, IDC_COMBO_MODE, CB_GETCURSEL, 0, 0));
         values.binaural_mode = mode_value(mode_sel < 0 ? 1u : static_cast<unsigned>(mode_sel));
 
-        values.hrtf_source = IsDlgButtonChecked(m_hwnd, IDC_RADIO_HRTF_ROSELLA) == BST_CHECKED
-                                 ? joc_settings::HrtfSource::kRosella
-                                 : joc_settings::HrtfSource::kSofa;
         values.hrtf_file = get_text(GetDlgItem(m_hwnd, IDC_EDIT_HRTF));
         values.ffmpeg_path = get_text(GetDlgItem(m_hwnd, IDC_EDIT_FFMPEG));
         values.tail_seconds =
@@ -503,13 +496,9 @@ private:
         set_text(GetDlgItem(m_hwnd, IDC_LABEL_OUTPUT_STATUS), output_status);
 
         joc_decode::Settings effective = joc_settings::current();
-        effective.hrtf_source = static_cast<joc_decode::HrtfSource>(values.hrtf_source);
         effective.hrtf_file = values.hrtf_file;
         const std::string file = joc_decode::resolve_hrtf_file(effective);
-        const joc_lang::Text source = values.hrtf_source == joc_settings::HrtfSource::kRosella
-                                          ? joc_lang::Text::kHrtfSourceRosella
-                                          : joc_lang::Text::kHrtfSourceSofa;
-        std::string hrtf_status = joc_lang::get(language, source);
+        std::string hrtf_status = joc_lang::get(language, joc_lang::Text::kHrtfSourceRosella);
         hrtf_status += joc_lang::get(language, joc_lang::Text::kSeparator);
         if (values.hrtf_file.empty()) {
             hrtf_status += joc_lang::get(language, joc_lang::Text::kHrtfDefault);
@@ -538,7 +527,6 @@ private:
         const joc_settings::Values now = read_controls();
         if (now.output != m_initial.output) return true;
         if (now.speaker_layout != m_initial.speaker_layout) return true;
-        if (now.hrtf_source != m_initial.hrtf_source) return true;
         if (now.hrtf_file != m_initial.hrtf_file) return true;
         if (now.binaural_mode != m_initial.binaural_mode) return true;
         if (now.gain_enabled != m_initial.gain_enabled) return true;

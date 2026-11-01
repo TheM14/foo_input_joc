@@ -8,7 +8,6 @@
 #include "foundation/status.h"
 #include "hrtf/jochrtf.h"
 #include "hrtf/rosella_model.h"
-#include "hrtf/sofa_cache.h"
 #include "joc_bitstream/bed_layout_map.h"
 #include "joc_bitstream/joc_parser.h"
 #include "joc_core/objects16.h"
@@ -143,26 +142,7 @@ Status Stream::create(const Config& config) {
             hrtf::Field field;
             hrtf::Kernels kernels;
             Status status = Status::success();
-            if (!config_.hrtf_sofa_path.empty()) {
-                // The .jochrtf is an internal cache: the SOFA is the user-facing input.
-                hrtf::SofaFieldRequest request;
-                request.sofa_path = config_.hrtf_sofa_path;
-                request.options.shell_radius_m = config_.hrtf_radius_m;
-                request.cache_dir = config_.hrtf_cache_dir;
-                switch (config_.hrtf_cache_policy) {
-                    case JOC_HRTF_CACHE_NONE: request.policy = hrtf::CachePolicy::None; break;
-                    case JOC_HRTF_CACHE_DISK: request.policy = hrtf::CachePolicy::Disk; break;
-                    default: request.policy = hrtf::CachePolicy::Memory; break;
-                }
-                std::string cache_path;
-                status = hrtf::load_or_compile_sofa_field(request, &field, &cache_path);
-                if (!status.ok()) {
-                    return Status::fail(status.code(), stage::kRender,
-                                        "binaural setup failed: " + status.message());
-                }
-            } else {
-                status = hrtf::load_jochrtf(config_.hrtf_path, &field);
-            }
+            status = hrtf::load_jochrtf(config_.hrtf_path, &field);
             if (status.ok()) {
                 status = config_.kernels_path.empty()
                              ? (kernels = hrtf::builtin_kernels(), Status::success())
@@ -175,7 +155,10 @@ Status Stream::create(const Config& config) {
                 profile = binaural::Profile::Far;
             }
             if (status.ok()) {
-                status = binaural_.open(field, kernels, profile);
+                binaural::RoomConstants room;
+                room.enable_early_reflections = config_.jochrtf_room ? 1u : 0u;
+                room.enable_late_room = room.enable_early_reflections;
+                status = binaural_.open(field, kernels, profile, room);
             }
             if (!status.ok()) {
                 return status;

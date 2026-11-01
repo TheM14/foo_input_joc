@@ -358,14 +358,6 @@ typedef enum joc_clip_action {
     JOC_CLIP_ABORT = 3     /* fail the task */
 } joc_clip_action;
 
-/* Compiled-HRTF cache policy for a SOFA input; the .jochrtf itself is an
- * internal artifact of the compile step. */
-typedef enum joc_hrtf_cache_policy {
-    JOC_HRTF_CACHE_NONE = 0,   /* compile and discard */
-    JOC_HRTF_CACHE_MEMORY = 1, /* compile and keep in this process (default) */
-    JOC_HRTF_CACHE_DISK = 2    /* compile, reuse and write <cache_dir>/<name>.jochrtf */
-} joc_hrtf_cache_policy;
-
 /* Which 64-QMF / 77-hybrid filterbank the Rosella .personalized_headphone path
  * renders through.  The two banks differ in coefficients, hybrid tap count,
  * high-band slot delay and total latency, so they are not interchangeable; the
@@ -424,16 +416,11 @@ typedef struct joc_task_config {
 
     joc_cancel_token* cancel;           /* optional */
 
-    /* Binaural HRTF input (config version 2): when hrtf_sofa_path is set the
-     * library compiles it with hrtf_cache_policy / hrtf_cache_dir / hrtf_radius_m
-     * and hrtf_path is unused.  hrtf_path stays the advanced override that reads
-     * a .jochrtf directly. */
-    const char* hrtf_sofa_path;         /* SOFA SimpleFreeFieldHRIR input */
+    /* Binaural input (config version 2): a compiled .jochrtf field (hrtf_path)
+     * or a Rosella .personalized_headphone model. */
     const char* personalized_headphone_path; /* Rosella .personalized_headphone input */
-    const char* hrtf_cache_dir;         /* disk policy directory */
-    uint32_t hrtf_cache_policy;         /* joc_hrtf_cache_policy */
     uint32_t rosella_filterbank;        /* joc_rosella_filterbank; 0 = PUBLIC */
-    double hrtf_radius_m;               /* SOFA measurement-radius shell */
+    uint32_t jochrtf_room;              /* non-zero enables the project room */
 } joc_task_config;
 
 typedef enum joc_task_status {
