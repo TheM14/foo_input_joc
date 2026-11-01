@@ -2,11 +2,13 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <limits>
+#include <utility>
 #include <vector>
 
 // The kernel copy that is compiled into this component; see kernel/.
@@ -385,6 +387,39 @@ const LayoutSpec* layout_table(std::size_t* count) {
 unsigned speaker_channels(const std::string& layout) {
     const LayoutSpec* spec = find_layout(layout);
     return spec != nullptr ? spec->channels : 0;
+}
+
+static int channel_index(const LayoutSpec& spec, const char* name) {
+    for (unsigned i = 0; i < spec.channels; ++i) {
+        if (std::strcmp(spec.speakers[i], name) == 0) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+SideRearChannels side_rear_channels(const std::string& layout) {
+    SideRearChannels map;
+    const LayoutSpec* spec = find_layout(layout);
+    if (spec == nullptr) return map;
+    map.left_side = channel_index(*spec, "Ls");
+    map.right_side = channel_index(*spec, "Rs");
+    map.left_rear = channel_index(*spec, "Lrs");
+    map.right_rear = channel_index(*spec, "Rrs");
+    return map;
+}
+
+void swap_side_rear(float* interleaved, std::size_t frames, unsigned channels,
+                    const SideRearChannels& map) {
+    if (interleaved == nullptr || channels == 0 || !map.complete()) return;
+    int highest = map.left_side;
+    if (map.right_side > highest) highest = map.right_side;
+    if (map.left_rear > highest) highest = map.left_rear;
+    if (map.right_rear > highest) highest = map.right_rear;
+    if (static_cast<unsigned>(highest) >= channels) return;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        float* block = interleaved + frame * channels;
+        std::swap(block[map.left_side], block[map.left_rear]);
+        std::swap(block[map.right_side], block[map.right_rear]);
+    }
 }
 
 namespace {

@@ -495,6 +495,13 @@ public:
         if (m_channels == 0) m_channels = 2;
         // Only the map the component can describe is declared; see channel_map_for().
         m_channel_config = channel_map_for(m_channels);
+        // The swap is a delivery-time reorder of the renderer's own channels, so it
+        // only applies when the layout the core rendered is the one being delivered.
+        m_swap_channels = joc_decode::SideRearChannels();
+        if (m_settings.swap_side_rear && m_settings.output == joc_decode::Output::kSpeaker &&
+            joc_decode::speaker_channels(m_settings.speaker_layout) == m_channels) {
+            m_swap_channels = joc_decode::side_rear_channels(m_settings.speaker_layout);
+        }
         m_buffer.resize(kRunFrames * m_channels);
         m_frames_delivered = 0;
         m_reported = false;
@@ -541,6 +548,9 @@ public:
         // the pipeline sees is the 24-bit grid rather than the renderer's float -- which
         // is the whole point of the option.  The quantisation happens here and nowhere
         // else, so a sample is rounded once.
+        if (m_swap_channels.complete()) {
+            joc_decode::swap_side_rear(m_buffer.data(), frames, m_channels, m_swap_channels);
+        }
         const float* samples = m_buffer.data();
 
         double expected_delivered_peak = 0.0;
@@ -703,6 +713,9 @@ private:
     std::uint64_t m_clipped_samples = 0;
     bool m_clip_reported = false;
     unsigned m_channels = 2;
+    // Set at open() when the layout has both a side and a rear pair and the
+    // setting is on; empty otherwise, which makes the swap a no-op.
+    joc_decode::SideRearChannels m_swap_channels;
     std::uint64_t m_frames_delivered = 0;
     bool m_reported = false;
     // Chunks whose delivered samples did not match what the renderer produced.

@@ -91,6 +91,10 @@ struct Settings {
     // rule is reproduced here instead.  Out-of-range samples follow the core's
     // JOC_CLIP_CONTINUE policy: truncated to the edge, and reported.
     bool force_int24 = false;
+    // Swap Ls with Lrs and Rs with Rrs in the delivered PCM.  Only layouts that
+    // carry both the side and the rear pair are affected, so a 5.1.x layout whose
+    // rear slots hold top channels is left alone.
+    bool swap_side_rear = false;
 };
 
 // ---- speaker delivery ------------------------------------------------------
@@ -124,6 +128,29 @@ const LayoutSpec* layout_table(std::size_t* count);
 // Channel count of a named layout, or 0 when the layout is not one of the
 // layouts the core accepts.
 unsigned speaker_channels(const std::string& layout);
+
+// The channels a side/rear swap moves, as positions in the layout's own order.
+// A layout without both pairs leaves them at -1, which makes the swap a no-op;
+// the lookup is by name, so a layout that reuses a slot for something else (5.1.2
+// and 5.1.4 put top channels where 7.1 has the rear pair) is never touched.
+struct SideRearChannels {
+    int left_side = -1;
+    int right_side = -1;
+    int left_rear = -1;
+    int right_rear = -1;
+
+    bool complete() const {
+        return left_side >= 0 && right_side >= 0 && left_rear >= 0 && right_rear >= 0;
+    }
+};
+
+// Looks the layout up in the table above and locates its Ls/Rs and Lrs/Rrs.
+SideRearChannels side_rear_channels(const std::string& layout);
+
+// Swaps Ls with Lrs and Rs with Rrs in place, `frames` blocks of `channels`
+// interleaved float32 samples.  Everything else in the block is untouched.
+void swap_side_rear(float* interleaved, std::size_t frames, unsigned channels,
+                    const SideRearChannels& map);
 
 // Directory this component's DLL was loaded from.  The default HRTF folder is
 // <that directory>\HRTF, the same place the reference CLI looks next to its exe.

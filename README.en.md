@@ -62,9 +62,8 @@ Preferences → Tools → **JOC decoder**:
 * **Output** — **Binaural (HRTF)**, or a **Speaker layout** from 2.0 to 9.1.6 (names and channel order
   in the [table below](#speaker-layouts-and-channel-order));
 * **Binaural mode** (near / mid / far) and the room **tail** in seconds;
-* **HRTF** — a **SOFA file** or a **Rosella personalized model**. An empty
-  path means the default location, `<component directory>\HRTF\binaural.sofa` or
-  `binaural.personalized_headphone`;
+* **HRTF** — a **Rosella personalized model**. An empty path means the default
+  location, `<component directory>\HRTF\binaural.personalized_headphone`;
 * **Gain** — a switch and a value in dB. Binaural rendering can exceed full scale on material
   that does not clip in the core mix, so attenuation belongs here;
 * **Force 24-bit output (int24)** — off by default, which delivers float32. When on, every sample
@@ -76,6 +75,13 @@ Preferences → Tools → **JOC decoder**:
   from the Media Library and add it again): foobar2000 caches technical information per file, and
   until it is reloaded Properties and the Converter still go by the old 32-bit floating-point
   answer, warning that the encoder does not take floating-point input.
+* **Swap side and rear channels** — off by default. When on, `Ls` and `Lrs`, and
+  `Rs` and `Rrs`, are exchanged just before the PCM is handed over (5↔7 and 6↔8
+  counting from one in 7.1). It only applies to layouts that carry both a side and
+  a rear pair — 7.1, 7.1.2, 7.1.4, 9.1.4 and 9.1.6 — so the top channels in the
+  last two slots of 5.1.2 and 5.1.4 are never touched. Only the delivered channel
+  order changes; decoding, object positions and the layout table are untouched,
+  and both the float32 and the int24 delivery carry the swap.
 * the **ffmpeg.exe** executable to use.
 * **Language** — **Follow system** / **简体中文** / **English**. Every string on the page, the status
   lines and the errors a user can see use the selected language, and switching takes effect

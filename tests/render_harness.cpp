@@ -6,7 +6,6 @@
 //     --mode binaural|speaker     default binaural
 //     --format float32|int24      delivered sample format (default float32)
 //     --layout NAME               speaker layout (default 7.1)
-//     --hrtf-source sofa|rosella  kind of model --hrtf points at (default sofa)
 //     --hrtf PATH                 HRTF to render with; supplied by the caller and
 //                                 never part of this repository.  Without it the
 //                                 default location beside the executable is used.
@@ -63,8 +62,8 @@ struct Options {
     std::string mode = "binaural";
     std::string format = "float32";  // float32 | int24
     std::string layout = "7.1";
-    std::string hrtf;                  // SOFA file, or Rosella model file
-    std::string hrtf_source = "sofa";  // sofa | rosella
+    std::string hrtf;                  // Rosella model file
+    bool swap_side_rear = false;       // --swap-side-rear
     std::string ffmpeg = "ffmpeg";
     double gain_db = 0.0;
     double tail_seconds = 5.0;
@@ -146,7 +145,7 @@ bool parse(int argc, char** argv, Options* options) {
         else if (arg == "--format") options->format = next();
         else if (arg == "--layout") options->layout = next();
         else if (arg == "--hrtf") options->hrtf = next();
-        else if (arg == "--hrtf-source") options->hrtf_source = next();
+        else if (arg == "--swap-side-rear") options->swap_side_rear = true;
         else if (arg == "--ffmpeg") options->ffmpeg = next();
         else if (arg == "--gain-db") options->gain_db = std::atof(next().c_str());
         else if (arg == "--tail") options->tail_seconds = std::atof(next().c_str());
@@ -211,6 +210,16 @@ bool render_once(const joc_decode::Settings& settings, const Options& options,
     const std::string header = wav_header(channels, 48000, 0, int24);
     std::fwrite(header.data(), 1, header.size(), file);
 
+    // The same lookup the component does, so the harness exercises the delivery
+    // reorder with the layout's own channel positions.
+    const joc_decode::SideRearChannels swap_map =
+        options.swap_side_rear ? joc_decode::side_rear_channels(settings.speaker_layout)
+                               : joc_decode::SideRearChannels();
+    if (options.swap_side_rear && !swap_map.complete()) {
+        std::fprintf(stderr, "harness: --swap-side-rear has no effect on layout %s\n",
+                     settings.speaker_layout.c_str());
+    }
+
     constexpr std::size_t kChunk = 4096;
     std::vector<float> buffer(kChunk * channels);
     std::vector<std::uint8_t> packed;
@@ -236,6 +245,9 @@ bool render_once(const joc_decode::Settings& settings, const Options& options,
             if (left < want) want = static_cast<std::size_t>(left);
         }
         const std::size_t frames = engine.read(buffer.data(), want, error);
+        if (frames != 0 && options.swap_side_rear) {
+            joc_decode::swap_side_rear(buffer.data(), frames, channels, swap_map);
+        }
         if (frames == 0) {
             if (!error->empty()) {
                 std::fclose(file);
@@ -291,7 +303,6 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "usage: render_harness --input <eac3> --output <wav> [--mode binaural|speaker]\n"
                      "       [--format float32|int24] [--layout NAME]\n"
-                     "       [--hrtf-source sofa|rosella] [--hrtf PATH]\n"
                      "       [--gain-db X] [--tail S] [--ffmpeg path] [--max-frames N]\n"
                      "       [--max-input-frames N] [--seek-to S] [--seek-at N:S]\n"
                      "       [--total-seconds S] [--pipeline-delay N] [--preroll-frames N]\n"
@@ -304,8 +315,6 @@ int main(int argc, char** argv) {
     settings.output = (options.mode == "speaker") ? joc_decode::Output::kSpeaker
                                                   : joc_decode::Output::kBinaural;
     settings.speaker_layout = options.layout;
-    settings.hrtf_source = (options.hrtf_source == "rosella") ? joc_decode::HrtfSource::kRosella
-                                                             : joc_decode::HrtfSource::kSofa;
     settings.hrtf_file = options.hrtf;
     settings.gain_db = options.gain_db;
     settings.tail_seconds = options.tail_seconds;

@@ -33,6 +33,9 @@ struct Values {
     double tail_seconds = 5.0;
     // Deliver int24 instead of float32; see joc_decode::Settings::force_int24.
     bool force_int24 = false;
+    // Swap Ls with Lrs and Rs with Rrs in the delivered speaker PCM; a layout
+    // without both pairs is delivered unchanged.
+    bool swap_side_rear = false;
     unsigned object_delay_samples = 1473;
     unsigned native_threads = 0;
     std::string ffmpeg_path = "ffmpeg";

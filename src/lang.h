@@ -49,6 +49,7 @@ enum class Text {
     kGainStatusOn,
     kGainStatusOff,
     kGainHint,
+    kCheckSwapSideRear,
     kGroupOther,
     kLabelLanguage,
     kLabelFfmpeg,

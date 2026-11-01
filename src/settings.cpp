@@ -29,6 +29,7 @@ constexpr GUID kGuidGainEnabled = {0x74b1e5c8, 0x2a39, 0x4d16, {0x8f, 0x62, 0x0d
 constexpr GUID kGuidGain = {0x6c04d8b2, 0xe75f, 0x4a39, {0x8d, 0x26, 0x51, 0xb3, 0xc8, 0x40, 0x9e, 0x27}};
 constexpr GUID kGuidTail = {0x38f1b6a7, 0x0d24, 0x4e88, {0xb7, 0x95, 0x2c, 0x61, 0x4f, 0xd2, 0x08, 0xa3}};
 constexpr GUID kGuidForceInt24 = {0xd2c67f41, 0x8b53, 0x4a2e, {0x97, 0x61, 0x0f, 0xc8, 0x35, 0xba, 0x64, 0x12}};
+constexpr GUID kGuidSwapSideRear = {0x2b7f6d18, 0x59c4, 0x4a83, {0x8e, 0x15, 0x73, 0xac, 0x06, 0xd9, 0x4b, 0x27}};
 constexpr GUID kGuidObjectDelay = {0x5b2e9c18, 0xa640, 0x4d7b, {0x92, 0x0e, 0x37, 0xc5, 0x81, 0x6b, 0x2a, 0x54}};
 constexpr GUID kGuidThreads = {0xcb7a4015, 0x3f98, 0x4c62, {0xa0, 0x8d, 0x1b, 0x74, 0x29, 0xe6, 0x53, 0x0f}};
 constexpr GUID kGuidFfmpeg = {0x0e9d37c2, 0x5a18, 0x4b40, {0xb6, 0x3f, 0x88, 0x2d, 0x9a, 0x70, 0x1c, 0x65}};
@@ -45,6 +46,8 @@ cfg_int g_gain_mdb(kGuidGain, 0);
 cfg_uint g_tail_ms(kGuidTail, 5000);
 // Deliver int24 instead of float32.
 cfg_bool g_force_int24(kGuidForceInt24, false);
+// Swap the side and rear surround pairs in the delivered PCM.
+cfg_bool g_swap_side_rear(kGuidSwapSideRear, false);
 cfg_uint g_object_delay(kGuidObjectDelay, 1473);
 cfg_uint g_threads(kGuidThreads, 0);
 cfg_string g_ffmpeg(kGuidFfmpeg, "ffmpeg");
@@ -124,6 +127,7 @@ Values read() {
     values.gain_db = static_cast<double>(static_cast<long long>(g_gain_mdb)) / 1000.0;
     values.tail_seconds = static_cast<double>(static_cast<unsigned>(g_tail_ms)) / 1000.0;
     values.force_int24 = static_cast<bool>(g_force_int24);
+    values.swap_side_rear = static_cast<bool>(g_swap_side_rear);
     values.object_delay_samples = static_cast<unsigned>(g_object_delay);
     values.native_threads = static_cast<unsigned>(g_threads);
     values.ffmpeg_path = g_ffmpeg.get_ptr();
@@ -153,6 +157,7 @@ void write(const Values& values) {
     g_gain_mdb = static_cast<long long>(values.gain_db * 1000.0 + (values.gain_db >= 0 ? 0.5 : -0.5));
     g_tail_ms = static_cast<unsigned>(values.tail_seconds * 1000.0 + 0.5);
     g_force_int24 = values.force_int24;
+    g_swap_side_rear = values.swap_side_rear;
     g_object_delay = values.object_delay_samples;
     g_threads = values.native_threads;
     g_ffmpeg = values.ffmpeg_path.c_str();
@@ -174,6 +179,7 @@ joc_decode::Settings current() {
     if (env_string("JOC_GAIN_ENABLED", &text)) values.gain_enabled = (text != "0");
     (void)env_double("JOC_TAIL_SECONDS", &values.tail_seconds);
     if (env_string("JOC_FORCE_INT24", &text)) values.force_int24 = (text != "0");
+    if (env_string("JOC_SWAP_SIDE_REAR", &text)) values.swap_side_rear = (text != "0");
     (void)env_uint("JOC_OBJECT_DELAY", &values.object_delay_samples);
     (void)env_uint("JOC_THREADS", &values.native_threads);
 
@@ -189,6 +195,7 @@ joc_decode::Settings current() {
     settings.gain_db = values.gain_enabled ? values.gain_db : 0.0;
     settings.tail_seconds = values.tail_seconds;
     settings.force_int24 = values.force_int24;
+    settings.swap_side_rear = values.swap_side_rear;
     settings.object_delay_samples = values.object_delay_samples;
     settings.native_threads = values.native_threads;
     settings.ffmpeg_path = values.ffmpeg_path.empty() ? "ffmpeg" : values.ffmpeg_path;
@@ -217,6 +224,7 @@ std::string describe(const joc_decode::Settings& settings) {
     // Stated only when it is not the default, so a default log line reads as it
     // always did.
     append_to(text, settings.force_int24 ? ", int24=forced" : "");
+    append_to(text, settings.swap_side_rear ? ", swap=side/rear" : "");
     return text;
 }
 
@@ -230,6 +238,7 @@ std::string describe(const Values& values) {
                   values.tail_seconds, values.object_delay_samples, values.native_threads,
                   values.ffmpeg_path.c_str());
     append_to(text, values.force_int24 ? " int24=forced" : "");
+    append_to(text, values.swap_side_rear ? " swap=side/rear" : "");
     append_to(text, values.language == joc_lang::Language::kSystem
                         ? " language=system"
                         : (values.language == joc_lang::Language::kEnglish

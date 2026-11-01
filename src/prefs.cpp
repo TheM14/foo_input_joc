@@ -284,7 +284,8 @@ private:
                     notify();
                     return TRUE;
                 }
-                if (id == IDC_CHECK_GAIN || id == IDC_CHECK_INT24) {
+                if (id == IDC_CHECK_GAIN || id == IDC_CHECK_INT24 ||
+                    id == IDC_CHECK_SWAP_SIDE_REAR) {
                     update_status();
                     notify();
                     return TRUE;
@@ -367,6 +368,7 @@ private:
         label(IDC_LABEL_MODE, joc_lang::Text::kLabelMode);
         label(IDC_LABEL_TAIL, joc_lang::Text::kLabelTail);
         label(IDC_CHECK_INT24, joc_lang::Text::kCheckInt24);
+        label(IDC_CHECK_SWAP_SIDE_REAR, joc_lang::Text::kCheckSwapSideRear);
         label(IDC_LABEL_INT24_HINT, joc_lang::Text::kInt24Hint);
         label(IDC_GROUP_HRTF, joc_lang::Text::kGroupHrtf);
         label(IDC_RADIO_HRTF_ROSELLA, joc_lang::Text::kRadioRosella);
@@ -406,6 +408,8 @@ private:
                      values.gain_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_INT24), BM_SETCHECK,
                      values.force_int24 ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_SWAP_SIDE_REAR), BM_SETCHECK,
+                     values.swap_side_rear ? BST_CHECKED : BST_UNCHECKED, 0);
 
         // The item lists are language-dependent, so they are built (in the stored
         // language) before the selections are restored, and the texts are applied
@@ -457,6 +461,8 @@ private:
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_GAIN) == BST_CHECKED;
         values.force_int24 =
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_INT24) == BST_CHECKED;
+        values.swap_side_rear =
+            IsDlgButtonChecked(m_hwnd, IDC_CHECK_SWAP_SIDE_REAR) == BST_CHECKED;
         values.language = selected_language();
         // Advanced values are not on this page; keep whatever is stored.
         const joc_settings::Values stored = joc_settings::read();
@@ -519,6 +525,7 @@ private:
         if (now.binaural_mode != m_initial.binaural_mode) return true;
         if (now.gain_enabled != m_initial.gain_enabled) return true;
         if (now.force_int24 != m_initial.force_int24) return true;
+        if (now.swap_side_rear != m_initial.swap_side_rear) return true;
         if (now.gain_db != m_initial.gain_db) return true;
         if (now.tail_seconds != m_initial.tail_seconds) return true;
         if (now.ffmpeg_path != m_initial.ffmpeg_path) return true;

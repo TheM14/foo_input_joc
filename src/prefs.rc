@@ -57,6 +57,8 @@ BEGIN
                     IDC_LABEL_GAIN_HINT, 16, 202, 300, 10
 
     GROUPBOX        "其它", IDC_GROUP_MISC, 7, 219, 316, 48
+    CONTROL         "交换侧环绕与后环绕声道", IDC_CHECK_SWAP_SIDE_REAR, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 176, 232, 140, 10
     LTEXT           "界面语言", IDC_LABEL_LANGUAGE, 16, 232, 34, 10
     COMBOBOX        IDC_COMBO_LANGUAGE, 52, 229, 110, 90,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP

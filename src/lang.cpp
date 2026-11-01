@@ -53,6 +53,8 @@ constexpr Entry kTexts[] = {
     {Text::kGainStatusOff, "增益关（输出不衰减）", "gain off (no attenuation)"},
     {Text::kGainHint, "双耳渲染后可能超过 0 dBFS，可用负值衰减。",
      "Binaural rendering can exceed 0 dBFS; attenuate with a negative value."},
+    {Text::kCheckSwapSideRear, "交换侧环绕与后环绕声道",
+     "Swap side and rear channels"},
     {Text::kGroupOther, "其它", "Other"},
     {Text::kLabelLanguage, "界面语言", "Language"},
     {Text::kLabelFfmpeg, "ffmpeg.exe", "ffmpeg.exe"},
