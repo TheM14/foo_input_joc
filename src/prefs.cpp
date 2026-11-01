@@ -260,25 +260,14 @@ private:
                 const int code = HIWORD(wparam);
                 if (id == IDC_BROWSE_HRTF) {
                     std::string path = get_text(GetDlgItem(m_hwnd, IDC_EDIT_HRTF));
-                    // The filter follows the selected source, because that is what
-                    // decides the format the file has to be in.
-                    const wchar_t* filter = L"SOFA (*.sofa)\0*.sofa\0所有文件 (*.*)\0*.*\0\0";
-                    const wchar_t* title = L"选择 SOFA HRTF 文件";
-                    if (IsDlgButtonChecked(m_hwnd, IDC_RADIO_HRTF_ROSELLA) == BST_CHECKED) {
-                        filter = L"Rosella 模型 (*.personalized_headphone)\0"
-                                 L"*.personalized_headphone\0所有文件 (*.*)\0*.*\0\0";
-                        title = L"选择 Rosella 个性化模型";
-                    }
+                    const wchar_t* filter = L"Rosella 模型 (*.personalized_headphone)\0"
+                                            L"*.personalized_headphone\0所有文件 (*.*)\0*.*\0\0";
+                    const wchar_t* title = L"选择 Rosella 个性化模型";
                     if (pick_file(m_hwnd, path, title, filter)) {
                         set_text(GetDlgItem(m_hwnd, IDC_EDIT_HRTF), path);
                         update_status();
                         notify();
                     }
-                    return TRUE;
-                }
-                if (id == IDC_RADIO_HRTF_SOFA || id == IDC_RADIO_HRTF_ROSELLA) {
-                    update_status();
-                    notify();
                     return TRUE;
                 }
                 if (id == IDC_BROWSE_FFMPEG) {
@@ -380,7 +369,6 @@ private:
         label(IDC_CHECK_INT24, joc_lang::Text::kCheckInt24);
         label(IDC_LABEL_INT24_HINT, joc_lang::Text::kInt24Hint);
         label(IDC_GROUP_HRTF, joc_lang::Text::kGroupHrtf);
-        label(IDC_RADIO_HRTF_SOFA, joc_lang::Text::kRadioSofa);
         label(IDC_RADIO_HRTF_ROSELLA, joc_lang::Text::kRadioRosella);
         label(IDC_LABEL_HRTF, joc_lang::Text::kLabelHrtfFile);
         label(IDC_BROWSE_HRTF, joc_lang::Text::kButtonBrowse);
