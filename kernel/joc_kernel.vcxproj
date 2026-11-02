@@ -180,6 +180,7 @@
     <ClCompile Include="src\oamd\oamd_parser.cpp" />
     <ClCompile Include="src\speaker\speaker_layout_lookup.cpp" />
     <ClCompile Include="src\speaker\speaker_step.cpp" />
+    <ClCompile Include="src\speaker\speaker_trim.cpp" />
     <ClCompile Include="src\stream\stream.cpp" />
     <ClCompile Include="src\task\task.cpp" />
     <ClCompile Include="src\telemetry\event_bus.cpp" />
@@ -260,6 +261,7 @@
     <ClInclude Include="src\simd\simd.h" />
     <!-- src\simd\kernels_intrin_neon.cpp is excluded on every platform; see above. -->
     <ClInclude Include="src\speaker\speaker_layout_lookup.h" />
+    <ClInclude Include="src\speaker\speaker_trim.h" />
     <ClInclude Include="src\speaker\speaker_layouts.h" />
     <ClInclude Include="src\speaker\speaker_step.h" />
     <ClInclude Include="src\stream\stream.h" />
