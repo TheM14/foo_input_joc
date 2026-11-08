@@ -5,7 +5,8 @@
   shipping and loading joc_core.dll.
 
   The sources under kernel\src and kernel\include are a verbatim copy of the
-  upstream library (see JustOneCacophonyCXX\CMakeLists.txt): nothing under either
+  upstream library at commit 3f0d5e87fe41b90d9350528d2dca2ca82a637a3f (see
+  JustOneCacophonyCXX\CMakeLists.txt): nothing under either
   tree is edited here, and both are kept identical to it, so a single core serves
   the upstream tools and this component alike.  The static build needs no branch
   of its own: JOC_STATIC (kernel\include\joc_core.h / joc_stream.h) and
@@ -177,6 +178,8 @@
     <ClCompile Include="src\joc_bitstream\bed_layout_map.cpp" />
     <ClCompile Include="src\joc_bitstream\joc_parser.cpp" />
     <ClCompile Include="src\joc_core\objects16.cpp" />
+    <ClCompile Include="src\oamd\oamd_math.cpp" />
+    <ClCompile Include="src\oamd\oamd_params.cpp" />
     <ClCompile Include="src\oamd\oamd_parser.cpp" />
     <ClCompile Include="src\speaker\speaker_layout_lookup.cpp" />
     <ClCompile Include="src\speaker\speaker_step.cpp" />
@@ -256,6 +259,9 @@
     <ClInclude Include="src\joc_bitstream\joc_parser.h" />
     <ClInclude Include="src\joc_core\objects16.h" />
     <ClInclude Include="src\joc_core\qmf_tables.h" />
+    <ClInclude Include="src\oamd\isf_tables.h" />
+    <ClInclude Include="src\oamd\oamd_math.h" />
+    <ClInclude Include="src\oamd\oamd_params.h" />
     <ClInclude Include="src\oamd\oamd_parser.h" />
     <ClInclude Include="src\simd\cpu_probe.h" />
     <ClInclude Include="src\simd\simd.h" />
@@ -264,6 +270,7 @@
     <ClInclude Include="src\speaker\speaker_trim.h" />
     <ClInclude Include="src\speaker\speaker_layouts.h" />
     <ClInclude Include="src\speaker\speaker_step.h" />
+    <ClInclude Include="src\speaker\speaker_meta.h" />
     <ClInclude Include="src\stream\stream.h" />
     <ClInclude Include="src\task\task.h" />
     <ClInclude Include="src\telemetry\event_bus.h" />

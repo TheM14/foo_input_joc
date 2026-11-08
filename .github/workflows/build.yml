@@ -3,7 +3,8 @@ name: build
 # Builds both architectures, publishes the two installable component packages as
 # workflow artifacts, and — when a tag is pushed — turns them into a GitHub release.
 # The SDK is fetched from foobar2000.org at build time (tools/setup_sdk.ps1) and the
-# renderer sources are part of this repository (kernel/), so nothing else is needed.
+# renderer sources are part of this repository (kernel/, synced from JustOneCacophonyCXX
+# commit 3f0d5e87fe41b90d9350528d2dca2ca82a637a3f), so nothing else is needed.
 
 on:
   push:

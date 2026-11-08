@@ -5,6 +5,10 @@
 （`kernel/src/joc_bitstream/joc_huffman_tables.h`）的公开标准来源，以及 HRTF 数据与
 专利的边界说明。
 
+`kernel/` 整体是 JustOneCacophonyCXX 在提交
+`3f0d5e87fe41b90d9350528d2dca2ca82a637a3f`（版本号仍为 1.2.0）的逐字副本；
+`v1.2.0` tag 指向更早的提交 a276028，不作为同步基准。
+
 ## 公开标准来源
 
 64-QMF → 77-hybrid 结构与 13-tap 低带 prototype 定义于

@@ -331,6 +331,7 @@ const LayoutSpec kLayouts[] = {
     {"9.1.6", 16,
      {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Lw", "Rw", "Ltf", "Rtf", "Ltm",
       "Rtm", "Ltr", "Rtr"}},
+    {"6.0", 6, {"L", "R", "Ls", "Rs", "Lrs", "Rrs"}},
 };
 
 constexpr std::size_t kLayoutCount = sizeof(kLayouts) / sizeof(kLayouts[0]);

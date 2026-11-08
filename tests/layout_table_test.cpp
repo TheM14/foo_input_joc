@@ -53,6 +53,7 @@ const Expected kExpected[] = {
     {"7.1.4", "L R C LFE Ls Rs Lrs Rrs Ltf Rtf Ltr Rtr"},
     {"9.1.4", "L R C LFE Ls Rs Lrs Rrs Lw Rw Ltf Rtf Ltr Rtr"},
     {"9.1.6", "L R C LFE Ls Rs Lrs Rrs Lw Rw Ltf Rtf Ltm Rtm Ltr Rtr"},
+    {"6.0", "L R Ls Rs Lrs Rrs"},
 };
 
 std::string join(const std::vector<std::string>& words) {
