@@ -14,7 +14,7 @@
 
 // Kept in one place: the string reported to foobar2000 and written to the log
 // must not drift apart.
-#define JOC_VERSION "0.5.0"
+#define JOC_VERSION "0.6.0"
 
 DECLARE_COMPONENT_VERSION("JOC decoder (E-AC-3 JOC)", JOC_VERSION,
                           "Plays E-AC-3 JOC (Dolby Atmos) files: the JOC objects are "
