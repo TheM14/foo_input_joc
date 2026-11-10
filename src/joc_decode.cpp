@@ -41,6 +41,11 @@ constexpr std::size_t kMaxBedChannels = 8;
 // can ever hold.
 constexpr std::size_t kBedReadBytes = 48u * 1024u;
 constexpr std::size_t kBedPipeBytes = 1u << 20;
+// The open-time JOC scan reads in chunks: a pipe read returns what is available,
+// not the whole request, and the first JOC frame can sit past the first chunk.
+constexpr std::size_t kScanChunkBytes = 64u * 1024u;
+// Cap on the trailing partial frame kept between reads.
+constexpr std::size_t kMaxScanWindow = 1u << 20;
 constexpr std::size_t kFrameSamples = JOC_FRAME_SAMPLES;
 
 // The decoded bed has to stay on the E-AC-3 frame grid that the JOC matrix and the
@@ -91,6 +96,45 @@ int scan_config_idx(const std::uint8_t* data, std::size_t size) {
 // True when the JOC configuration declares 7 core channels.
 bool seven_channel_config(int config) {
     return config == 1 || config == 2 || config == 4;
+}
+
+// Scans an E-AC-3 stream through `read` until a syncframe carrying the JOC EMDF
+// container is seen, and returns its joc_dmx_config_idx.  One read is not enough:
+// ReadFile returns as soon as some bytes are available (a pipe hands over a
+// partial chunk, not the whole request), and an encoder may leave the first
+// audio frames without JOC metadata, so the first JOC frame can sit past the
+// first read.  Returns -1 when the stream ends without one.
+template <typename ReadFn>
+int scan_config_idx_streaming(ReadFn&& read, std::size_t chunk_bytes) {
+    std::vector<std::uint8_t> window;
+    std::vector<std::uint8_t> chunk(chunk_bytes);
+    while (true) {
+        const std::size_t got = read(chunk.data(), chunk.size());
+        if (got == 0) break;
+        window.insert(window.end(), chunk.begin(),
+                      chunk.begin() + static_cast<std::ptrdiff_t>(got));
+        std::size_t offset = 0;
+        while (offset + 6u <= window.size()) {
+            const std::size_t bytes =
+                joc_eac3::frame_bytes_at(window.data(), window.size(), offset);
+            if (bytes == 0 || offset + bytes > window.size()) break;
+            if (joc_eac3::frame_has_joc(window.data() + offset, bytes)) {
+                unsigned config = 0;
+                if (joc_eac3::joc_config_idx(window.data() + offset, bytes, &config)) {
+                    return static_cast<int>(config);
+                }
+            }
+            offset += bytes;
+        }
+        // Only the trailing incomplete frame has to survive into the next read;
+        // the rest was examined above.
+        if (offset != 0) {
+            window.erase(window.begin(),
+                         window.begin() + static_cast<std::ptrdiff_t>(offset));
+        }
+        if (window.size() > kMaxScanWindow) break;
+    }
+    return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -866,22 +910,23 @@ bool Engine::Impl::position_bare(std::uint64_t frame, std::string* error) {
 
 bool Engine::Impl::resolve_bed_channels(std::string* error) {
     bed_channels = kDefaultBedChannels;
-    std::vector<std::uint8_t> buffer(1u << 20);
     int config = -1;
     if (eac3_from_pipe) {
         // The metadata stream has to run once to be sniffed; it is stopped again and
         // restarted from the beginning, which costs one extra ffmpeg spawn per track.
         if (!start_metadata(error)) return false;
-        const std::size_t got = eac3_pipe.read(buffer.data(), buffer.size());
+        config = scan_config_idx_streaming(
+            [this](void* data, std::size_t bytes) { return eac3_pipe.read(data, bytes); },
+            kScanChunkBytes);
         eac3_pipe.stop();
-        config = scan_config_idx(buffer.data(), got);
     } else {
         if (!eac3.is_open() && !eac3.open(input_path)) {
             if (error != nullptr) *error = "cannot open the input file";
             return false;
         }
-        const std::size_t got = eac3.read(buffer.data(), buffer.size());
-        config = scan_config_idx(buffer.data(), got);
+        config = scan_config_idx_streaming(
+            [this](void* data, std::size_t bytes) { return eac3.read(data, bytes); },
+            kScanChunkBytes);
         // Put the file back where the feed loop expects it.
         if (!eac3.seek(index_base)) {
             if (error != nullptr) *error = "cannot position the input file";

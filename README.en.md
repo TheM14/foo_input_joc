@@ -208,6 +208,5 @@ every container in the library, which is where the volume comes from.
 ## Licence
 
 `LICENSE` is the upstream MIT licence, copied unchanged; `kernel/` is a copy of the upstream
-rendering core sources, synced to JustOneCacophonyCXX commit
-`abce8465f8edda3356738e1a1db7cb1b33191c72` (the `v1.2.0` tag points at an older commit and is not
-the sync baseline), and keeps their notices. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+rendering core sources, synced to JustOneCacophonyCXX 1.3.1, and keeps their notices. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
