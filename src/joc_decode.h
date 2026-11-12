@@ -97,6 +97,8 @@ struct Settings {
     bool swap_side_rear = false;
     // ffmpeg is the sole decoder for this input; the kernel maps the channels.
     bool take_over_pcm = false;
+    // Apply Dolby Dialnorm to the ffmpeg E-AC-3 5.1 core decode.
+    bool dialnorm = false;
 };
 
 // ---- speaker delivery ------------------------------------------------------

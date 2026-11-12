@@ -38,6 +38,8 @@ struct Values {
     bool swap_side_rear = false;
     // Take over ordinary PCM files and render them binaurally through ffmpeg.
     bool take_over_pcm = false;
+    // Apply Dolby Dialnorm to the ffmpeg E-AC-3 5.1 core decode (-target_level -31).
+    bool dialnorm = false;
     unsigned object_delay_samples = 1473;
     unsigned native_threads = 0;
     std::string ffmpeg_path = "ffmpeg";

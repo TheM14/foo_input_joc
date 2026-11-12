@@ -54,8 +54,8 @@ BEGIN
     LTEXT           "dB", IDC_LABEL_GAIN, 68, 187, 12, 10
     EDITTEXT        IDC_EDIT_GAIN, 84, 184, 44, 13, ES_AUTOHSCROLL
     LTEXT           "", IDC_LABEL_GAIN_STATUS, 134, 187, 182, 10
-    LTEXT           "双耳渲染后可能超过 0 dBFS，可用负值衰减。",
-                    IDC_LABEL_GAIN_HINT, 16, 202, 300, 10
+    CONTROL         "Dolby Dialnorm 响度均衡（-31 dBFS）", IDC_CHECK_DIALNORM, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 16, 202, 300, 10
 
     GROUPBOX        "其它", IDC_GROUP_MISC, 7, 219, 316, 48
     CONTROL         "交换侧环绕与后环绕声道", IDC_CHECK_SWAP_SIDE_REAR, "Button",

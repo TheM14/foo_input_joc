@@ -96,8 +96,8 @@ HRTF 文件, 增益.
 
 ### HRTF data
 
-A SOFA measurement set or a personalised headphone model is supplied by whoever runs the
-component, and is listed in `.gitignore` so it cannot be committed by accident. Speaker layouts
+A personalised headphone model (`HRTF\binaural.personalized_headphone`) is supplied by whoever
+runs the component, and is listed in `.gitignore` so it cannot be committed by accident. Speaker layouts
 need none. Binaural rendering without an HRTF fails with a message naming the file it looked for.
 
 ## Speaker layouts and channel order

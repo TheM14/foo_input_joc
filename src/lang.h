@@ -46,6 +46,7 @@ enum class Text {
     kHrtfDefaultUnknown,
     kGroupGain,
     kCheckGain,
+    kCheckDialnorm,
     kLabelGainUnit,
     kGainStatusOn,
     kGainStatusOff,

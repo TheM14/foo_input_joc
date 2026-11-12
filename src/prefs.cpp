@@ -285,7 +285,8 @@ private:
                     return TRUE;
                 }
                 if (id == IDC_CHECK_GAIN || id == IDC_CHECK_INT24 ||
-                    id == IDC_CHECK_SWAP_SIDE_REAR || id == IDC_CHECK_PCM) {
+                    id == IDC_CHECK_SWAP_SIDE_REAR || id == IDC_CHECK_PCM ||
+                    id == IDC_CHECK_DIALNORM) {
                     update_status();
                     notify();
                     return TRUE;
@@ -378,7 +379,7 @@ private:
         label(IDC_GROUP_GAIN, joc_lang::Text::kGroupGain);
         label(IDC_CHECK_GAIN, joc_lang::Text::kCheckGain);
         label(IDC_LABEL_GAIN, joc_lang::Text::kLabelGainUnit);
-        label(IDC_LABEL_GAIN_HINT, joc_lang::Text::kGainHint);
+        label(IDC_CHECK_DIALNORM, joc_lang::Text::kCheckDialnorm);
         label(IDC_GROUP_MISC, joc_lang::Text::kGroupOther);
         label(IDC_LABEL_LANGUAGE, joc_lang::Text::kLabelLanguage);
         label(IDC_LABEL_FFMPEG, joc_lang::Text::kLabelFfmpeg);
@@ -406,6 +407,8 @@ private:
 
         SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_GAIN), BM_SETCHECK,
                      values.gain_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_DIALNORM), BM_SETCHECK,
+                     values.dialnorm ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_INT24), BM_SETCHECK,
                      values.force_int24 ? BST_CHECKED : BST_UNCHECKED, 0);
         SendMessageW(GetDlgItem(m_hwnd, IDC_CHECK_PCM), BM_SETCHECK,
@@ -461,6 +464,8 @@ private:
         values.gain_db = std::atof(get_text(GetDlgItem(m_hwnd, IDC_EDIT_GAIN)).c_str());
         values.gain_enabled =
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_GAIN) == BST_CHECKED;
+        values.dialnorm =
+            IsDlgButtonChecked(m_hwnd, IDC_CHECK_DIALNORM) == BST_CHECKED;
         values.force_int24 =
             IsDlgButtonChecked(m_hwnd, IDC_CHECK_INT24) == BST_CHECKED;
         values.swap_side_rear =
@@ -528,6 +533,7 @@ private:
         if (now.hrtf_file != m_initial.hrtf_file) return true;
         if (now.binaural_mode != m_initial.binaural_mode) return true;
         if (now.gain_enabled != m_initial.gain_enabled) return true;
+        if (now.dialnorm != m_initial.dialnorm) return true;
         if (now.force_int24 != m_initial.force_int24) return true;
         if (now.swap_side_rear != m_initial.swap_side_rear) return true;
         if (now.take_over_pcm != m_initial.take_over_pcm) return true;

@@ -947,6 +947,8 @@ bool Engine::Impl::start_bed(std::uint64_t source_sample, std::string* error) {
     // L R C LFE Ls Rs for 5.1 and L R C LFE BL BR SL SR for 7.1.
     // -drc_scale 0 -target_level 0: the bed is taken as stored, without the
     // stream's dynrng or target-level metadata being applied by the decoder.
+    // With Dialnorm enabled the 5.1 core is normalized to -31 dBFS; the 7-channel
+    // configurations keep the stored bed because this switch is specified for 5.1.
     //
     // -ac is only passed for the 5.1 configurations: `-ac 6` downmixes 5.1.2/7.1
     // into 5.1 and drops the extra pair, and `-ac 8` would remap 5.1.2 into 7.1.
@@ -958,6 +960,10 @@ bool Engine::Impl::start_bed(std::uint64_t source_sample, std::string* error) {
     // at the start of the file, which is a low-level, noise-like difference from a
     // play-through rather than a misalignment: the position stays exact.
     std::wstring input_arguments = L"-drc_scale 0 -target_level 0";
+    if (settings.dialnorm && bed_channels == kDefaultBedChannels) {
+        input_arguments = L"-drc_scale 0 -target_level -31";
+        joc_log::line("core bed: Dolby Dialnorm enabled (-target_level -31)");
+    }
     if (has_mov_timeline(input_path)) input_arguments += L" -ignore_editlist 1";
     const std::wstring offset = seek_time(source_sample);
     if (!offset.empty()) input_arguments += L" -ss " + offset;

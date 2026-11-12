@@ -74,6 +74,8 @@ Preferences → Tools → **JOC 解码器**：
   `.mp4/.m4a/.mkv/.mka/.mov/.webm` 仍先做 JOC 检测，非 JOC 的 E-AC-3 音轨才回退到 ffmpeg。
   如果内置解码器在 foobar2000 的 input priority 里排在前面，WAV/AC3/MP3 等文件会先被内置解码器拿走，
   本组件不会收到 open 调用；需要把 **JOC decoder** 提到对应内置解码器之前。
+* **Dolby Dialnorm 响度均衡（-31 dBFS）** —— 默认关闭。打开后只对 ffmpeg 解码的 E-AC-3 5.1 core 施加 `-target_level -31`，
+  用于按码流 dialnorm 做响度均衡；普通 PCM 和 7 声道 core 不受影响。
 * **ffmpeg.exe** 可执行文件路径。
 * **界面语言** —— **跟随系统** / **简体中文** / **English**。设置页的全部文字、状态行和用户可见的
   错误信息都用这一项选定的语言，切换后立刻生效；选择存在组件自己的配置里。"跟随系统"按 Windows 的
@@ -84,7 +86,7 @@ Preferences → Tools → **JOC 解码器**：
 
 ### HRTF 数据
 
-SOFA 测量集或个性化耳机模型由使用组件的人自己提供，并且写在 `.gitignore` 里，避免误提交。
+个性化耳机模型（`HRTF\binaural.personalized_headphone`）由使用组件的人自己提供，并且写在 `.gitignore` 里，避免误提交。
 扬声器布局不需要 HRTF。双耳渲染缺少 HRTF 时会报错并指出它找的是哪个文件。
 
 ## 扬声器布局与声道顺序
