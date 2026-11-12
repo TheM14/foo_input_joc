@@ -30,6 +30,7 @@ constexpr Entry kTexts[] = {
     {Text::kComboModeFar, "far（远场）", "far"},
     {Text::kLabelTail, "房间尾音（秒）", "Room tail (s)"},
     {Text::kCheckInt24, "强制 24bit 输出（int24）", "Force 24-bit output (int24)"},
+    {Text::kCheckPcm, "接管普通 PCM 源（ffmpeg 解码）", "Take over ordinary PCM (ffmpeg decode)"},
     {Text::kInt24Hint, "切换后需刷新文件信息", "reload file info after switching"},
     {Text::kSpeakerStatus, "扬声器布局 %s", "Speaker layout %s"},
     {Text::kGroupHrtf, "HRTF", "HRTF"},
@@ -38,8 +39,8 @@ constexpr Entry kTexts[] = {
     {Text::kLabelHrtfFile, "HRTF 文件", "HRTF file"},
     {Text::kButtonBrowse, "浏览…", "Browse…"},
     {Text::kHrtfHint,
-     "留空时读组件目录下 HRTF\\binaural.sofa 或 HRTF\\binaural.personalized_headphone。",
-     "Empty means HRTF\\binaural.sofa or binaural.personalized_headphone next to "
+     "留空时读组件目录下 HRTF\\binaural.personalized_headphone（Rosella 模型）。",
+     "Empty means HRTF\\binaural.personalized_headphone (Rosella model) next to "
      "the component."},
     {Text::kHrtfSourceSofa, "SOFA", "SOFA"},
     {Text::kHrtfSourceRosella, "Rosella 个性化模型", "Rosella personalized model"},

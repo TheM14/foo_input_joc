@@ -95,6 +95,8 @@ struct Settings {
     // carry both the side and the rear pair are affected, so a 5.1.x layout whose
     // rear slots hold top channels is left alone.
     bool swap_side_rear = false;
+    // ffmpeg is the sole decoder for this input; the kernel maps the channels.
+    bool take_over_pcm = false;
 };
 
 // ---- speaker delivery ------------------------------------------------------

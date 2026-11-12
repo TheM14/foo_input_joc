@@ -14,6 +14,7 @@
 #define IDC_LABEL_OUTPUT_STATUS 2019
 // Delivery format, in the same group: what the decoder hands to foobar2000.
 #define IDC_CHECK_INT24 2050
+#define IDC_CHECK_PCM 2052
 #define IDC_LABEL_INT24_HINT 2051
 
 #define IDC_GROUP_HRTF 2020

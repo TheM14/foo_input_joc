@@ -31,6 +31,7 @@ enum class Text {
     kComboModeFar,
     kLabelTail,
     kCheckInt24,
+    kCheckPcm,
     kInt24Hint,
     kSpeakerStatus,
     kGroupHrtf,

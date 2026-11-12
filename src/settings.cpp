@@ -30,6 +30,7 @@ constexpr GUID kGuidGain = {0x6c04d8b2, 0xe75f, 0x4a39, {0x8d, 0x26, 0x51, 0xb3,
 constexpr GUID kGuidTail = {0x38f1b6a7, 0x0d24, 0x4e88, {0xb7, 0x95, 0x2c, 0x61, 0x4f, 0xd2, 0x08, 0xa3}};
 constexpr GUID kGuidForceInt24 = {0xd2c67f41, 0x8b53, 0x4a2e, {0x97, 0x61, 0x0f, 0xc8, 0x35, 0xba, 0x64, 0x12}};
 constexpr GUID kGuidSwapSideRear = {0x2b7f6d18, 0x59c4, 0x4a83, {0x8e, 0x15, 0x73, 0xac, 0x06, 0xd9, 0x4b, 0x27}};
+constexpr GUID kGuidTakeOverPcm = {0x9f2b6c41, 0x7d38, 0x4a05, {0x86, 0x1e, 0x52, 0xb9, 0x0c, 0x74, 0xe3, 0x28}};
 constexpr GUID kGuidObjectDelay = {0x5b2e9c18, 0xa640, 0x4d7b, {0x92, 0x0e, 0x37, 0xc5, 0x81, 0x6b, 0x2a, 0x54}};
 constexpr GUID kGuidThreads = {0xcb7a4015, 0x3f98, 0x4c62, {0xa0, 0x8d, 0x1b, 0x74, 0x29, 0xe6, 0x53, 0x0f}};
 constexpr GUID kGuidFfmpeg = {0x0e9d37c2, 0x5a18, 0x4b40, {0xb6, 0x3f, 0x88, 0x2d, 0x9a, 0x70, 0x1c, 0x65}};
@@ -48,6 +49,7 @@ cfg_uint g_tail_ms(kGuidTail, 5000);
 cfg_bool g_force_int24(kGuidForceInt24, false);
 // Swap the side and rear surround pairs in the delivered PCM.
 cfg_bool g_swap_side_rear(kGuidSwapSideRear, false);
+cfg_bool g_take_over_pcm(kGuidTakeOverPcm, false);
 cfg_uint g_object_delay(kGuidObjectDelay, 1473);
 cfg_uint g_threads(kGuidThreads, 0);
 cfg_string g_ffmpeg(kGuidFfmpeg, "ffmpeg");
@@ -128,6 +130,7 @@ Values read() {
     values.tail_seconds = static_cast<double>(static_cast<unsigned>(g_tail_ms)) / 1000.0;
     values.force_int24 = static_cast<bool>(g_force_int24);
     values.swap_side_rear = static_cast<bool>(g_swap_side_rear);
+    values.take_over_pcm = static_cast<bool>(g_take_over_pcm);
     values.object_delay_samples = static_cast<unsigned>(g_object_delay);
     values.native_threads = static_cast<unsigned>(g_threads);
     values.ffmpeg_path = g_ffmpeg.get_ptr();
@@ -158,6 +161,7 @@ void write(const Values& values) {
     g_tail_ms = static_cast<unsigned>(values.tail_seconds * 1000.0 + 0.5);
     g_force_int24 = values.force_int24;
     g_swap_side_rear = values.swap_side_rear;
+    g_take_over_pcm = values.take_over_pcm;
     g_object_delay = values.object_delay_samples;
     g_threads = values.native_threads;
     g_ffmpeg = values.ffmpeg_path.c_str();
@@ -180,6 +184,7 @@ joc_decode::Settings current() {
     (void)env_double("JOC_TAIL_SECONDS", &values.tail_seconds);
     if (env_string("JOC_FORCE_INT24", &text)) values.force_int24 = (text != "0");
     if (env_string("JOC_SWAP_SIDE_REAR", &text)) values.swap_side_rear = (text != "0");
+    if (env_string("JOC_TAKE_OVER_PCM", &text)) values.take_over_pcm = (text != "0");
     (void)env_uint("JOC_OBJECT_DELAY", &values.object_delay_samples);
     (void)env_uint("JOC_THREADS", &values.native_threads);
 
@@ -196,6 +201,7 @@ joc_decode::Settings current() {
     settings.tail_seconds = values.tail_seconds;
     settings.force_int24 = values.force_int24;
     settings.swap_side_rear = values.swap_side_rear;
+    settings.take_over_pcm = values.take_over_pcm;
     settings.object_delay_samples = values.object_delay_samples;
     settings.native_threads = values.native_threads;
     settings.ffmpeg_path = values.ffmpeg_path.empty() ? "ffmpeg" : values.ffmpeg_path;

@@ -67,6 +67,13 @@ Preferences → Tools → **JOC 解码器**：
   对调（7.1 里是 5↔7、6↔8，从 1 数）。只在这种布局同时有侧环绕和后环绕时生效：
   7.1、7.1.2、7.1.4、9.1.4、9.1.6；5.1.2/5.1.4 的后两个槽位是天空声道，不会被误换。
   它只改交付 PCM 的声道顺序，不动解码、对象位置与布局定义，float32 与 int24 交付都生效。
+* **接管普通 PCM 源（ffmpeg 解码）** —— 默认关闭。打开后接管
+  `wav/flac/mp3/aac/ogg/opus/wma/aif/aiff/ac3/dts/dtshd/dtsma/wv/ape/tta/mpc/au/snd/caf/thd/mlp/truehd`，
+  由 ffmpeg 唯一负责解码到 48 kHz float32，再交给内核的 PCM layout 输入做 2.0/5.1/7.1 的 binaural 渲染；
+  此时不再把这个文件交给其他解码器。TrueHD/MLP 也接管；带 Atmos 的 TrueHD 经 ffmpeg 解成 PCM 后对象信息会丢失，暂按普通多声道处理。TrueHD 在 MKV 等容器里同样走容器回退，不受扩展名列表限制。DSD（`.dsf/.dff`）不在接管范围。
+  `.mp4/.m4a/.mkv/.mka/.mov/.webm` 仍先做 JOC 检测，非 JOC 的 E-AC-3 音轨才回退到 ffmpeg。
+  如果内置解码器在 foobar2000 的 input priority 里排在前面，WAV/AC3/MP3 等文件会先被内置解码器拿走，
+  本组件不会收到 open 调用；需要把 **JOC decoder** 提到对应内置解码器之前。
 * **ffmpeg.exe** 可执行文件路径。
 * **界面语言** —— **跟随系统** / **简体中文** / **English**。设置页的全部文字、状态行和用户可见的
   错误信息都用这一项选定的语言，切换后立刻生效；选择存在组件自己的配置里。"跟随系统"按 Windows 的

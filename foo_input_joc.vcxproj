@@ -80,7 +80,7 @@
       -->
       <PreprocessorDefinitions>NDEBUG;_WINDLL;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;JOC_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ForcedIncludeFiles>$(ProjectDir)src\joc_pch.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
-      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)SDK\foobar2000;$(ProjectDir)SDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir)kernel\include;$(ProjectDir)kernel\src;$(ProjectDir)SDK\foobar2000;$(ProjectDir)SDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4100;4127;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
@@ -99,6 +99,7 @@
     <ClCompile Include="src\eac3_scan.cpp" />
     <ClCompile Include="src\input_joc.cpp" />
     <ClCompile Include="src\joc_decode.cpp" />
+    <ClCompile Include="src\pcm_source.cpp" />
     <ClCompile Include="src\lang.cpp" />
     <ClCompile Include="src\log.cpp" />
     <ClCompile Include="src\main.cpp" />
@@ -110,6 +111,7 @@
     <ClInclude Include="src\container_scan.h" />
     <ClInclude Include="src\eac3_scan.h" />
     <ClInclude Include="src\joc_decode.h" />
+    <ClInclude Include="src\pcm_source.h" />
     <ClInclude Include="src\joc_pch.h" />
     <ClInclude Include="src\lang.h" />
     <ClInclude Include="src\log.h" />

@@ -36,7 +36,8 @@ BEGIN
     LTEXT           "", IDC_LABEL_OUTPUT_STATUS, 16, 53, 300, 10
     CONTROL         "强制 24bit 输出（int24）", IDC_CHECK_INT24, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 16, 65, 156, 10
-    LTEXT           "切换后需刷新文件信息", IDC_LABEL_INT24_HINT, 176, 65, 136, 10
+    CONTROL         "接管普通 PCM 源（ffmpeg 解码）", IDC_CHECK_PCM, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 176, 65, 140, 10
 
     GROUPBOX        "HRTF", IDC_GROUP_HRTF, 7, 79, 316, 92
     LTEXT           "Rosella 个性化模型", IDC_RADIO_HRTF_ROSELLA, 16, 91, 146, 10

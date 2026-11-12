@@ -36,6 +36,8 @@ struct Values {
     // Swap Ls with Lrs and Rs with Rrs in the delivered speaker PCM; a layout
     // without both pairs is delivered unchanged.
     bool swap_side_rear = false;
+    // Take over ordinary PCM files and render them binaurally through ffmpeg.
+    bool take_over_pcm = false;
     unsigned object_delay_samples = 1473;
     unsigned native_threads = 0;
     std::string ffmpeg_path = "ffmpeg";

@@ -27,6 +27,7 @@
 #include "eac3_scan.h"
 #include "joc_decode.h"
 #include "log.h"
+#include "pcm_source.h"
 #include "prefs.h"
 #include "settings.h"
 
@@ -35,6 +36,22 @@ namespace {
 constexpr std::size_t kSniffBytes = 256u * 1024u;
 constexpr std::size_t kRunFrames = 4096u;
 constexpr unsigned kSampleRate = 48000;
+
+// Formats the PCM takeover owns.  Containers are deliberately absent: MP4/M4A
+// may carry a JOC track, so those still go through the E-AC-3/JOC probe first.
+bool is_pcm_takeover_extension(const char* extension) {
+    static const char* const kExtensions[] = {
+        // Decode to PCM; the kernel then maps 2.0/5.1/7.1.  TrueHD/MLP is
+        // included too, but an Atmos TrueHD stream loses its objects when ffmpeg
+        // decodes it to PCM.  DSD (DSF/DFF) is deliberately absent.
+        "wav", "flac", "mp3", "aac", "ogg", "opus", "wma", "aif", "aiff",
+        "ac3", "dts", "dtshd", "dtsma", "wv", "ape", "tta", "mpc", "au",
+        "snd", "caf", "thd", "mlp", "truehd"};
+    for (const char* candidate : kExtensions) {
+        if (extension != nullptr && stricmp_utf8(extension, candidate) == 0) return true;
+    }
+    return false;
+}
 
 // Largest magnitude in a block, for the delivery check in decode_run().
 template <typename Sample>
@@ -253,11 +270,21 @@ public:
         const char* extension = std::strrchr(m_native_path.get_ptr(), '.');
         extension = (extension != nullptr) ? extension + 1 : "";
 
+        const joc_decode::Settings current = joc_settings::current();
+        joc_log::line("decoder: PCM takeover=%s, extension=%s",
+                      current.take_over_pcm ? "on" : "off",
+                      extension != nullptr ? extension : "");
+        if (current.take_over_pcm && is_pcm_takeover_extension(extension)) {
+            open_pcm(current, abort);
+            return;
+        }
+
         if (joc_container::is_container_extension(extension)) {
-            open_container(extension);
+            open_container(extension, abort);
         } else {
             open_bare(abort);
         }
+        if (m_pcm_mode) return;
 
         // Whatever else happens, the tags of this file are read by the component
         // that owns its format; failing to find one is not fatal, the technical
@@ -271,10 +298,49 @@ public:
         }
     }
 
+    // A non-JOC E-AC-3 input (bare or in a container) can still be rendered:
+    // ffmpeg decodes it to 48 kHz float32 and the kernel's PCM_LAYOUT input maps
+    // the channels.  JOC always wins; this only runs after the JOC probe said no.
+    void open_pcm_fallback(abort_callback& abort, unsigned audio_index,
+                           const char* reason) {
+        joc_decode::Settings settings = joc_settings::current();
+        if (!settings.take_over_pcm) {
+            decline("decoder: yielding to the built-in decoder (%s)", reason);
+            throw exception_io_unsupported_format();
+        }
+        joc_log::line("decoder: no JOC (%s); routing audio track %u through ffmpeg",
+                      reason, audio_index);
+        settings.audio_index = audio_index;
+        settings.take_over_pcm = true;
+        open_pcm(settings, abort);
+    }
+
     // A bare stream is either read from the file or handed back.  One thing has to
     // happen first: a tag area in front of the syncframes is not part of the
     // stream, and treating it as one would hand the file to the built-in decoder,
     // which plays it without the Atmos objects.
+    // Ordinary PCM: ffmpeg is the only decoder.  The kernel's PCM_LAYOUT stream
+    // maps 2.0/5.1/7.1 to fixed objects and renders binaural; this component does
+    // not hand the file to any other decoder.
+    void open_pcm(const joc_decode::Settings& settings, abort_callback& abort) {
+        std::string error;
+        if (!m_pcm.open(m_native_path.get_ptr(), settings, &error)) {
+            decline("decoder: PCM takeover could not decode the file (%s)", error.c_str());
+            throw exception_io_unsupported_format();
+        }
+        m_pcm_mode = true;
+        m_length = m_pcm.length_seconds();
+        m_channels = 2;
+        m_channel_config = channel_map_for(m_channels);
+        g_claimed.fetch_add(1, std::memory_order_relaxed);
+        joc_log::line("decoder: claiming PCM source via ffmpeg (%.3f s, binaural)",
+                      m_length);
+        if (!open_forwarded(m_forward_reader, input_info_reader::class_guid,
+                            m_path.c_str(), abort, &m_forward_name)) {
+            joc_log::line("decoder: no other component reads this file's tags");
+        }
+    }
+
     void open_bare(abort_callback& abort) {
         m_stream_start = leading_tag_bytes(m_file, abort);
         if (m_stream_start != 0) {
@@ -293,9 +359,8 @@ public:
                         static_cast<unsigned long long>(scan.frames_with_joc));
 
         if (scan.joc != joc_eac3::JocState::kYes) {
-            // Hand the file to the next entry in the priority table.
-            decline("decoder: yielding to the built-in decoder (%s)", scan.detail);
-            throw exception_io_unsupported_format();
+            open_pcm_fallback(abort, 0, scan.detail);
+            return;
         }
         joc_log::line("decoder: claiming this file as E-AC-3 JOC (bare stream)");
         g_claimed.fetch_add(1, std::memory_order_relaxed);
@@ -306,9 +371,15 @@ public:
     // the container's own headers, so a library scan pays nothing for the MP4s that
     // hold AAC), and does that track carry JOC (answered from a copied prefix of
     // the track).  Either "no" hands the file to the next decoder in the table.
-    void open_container(const char* extension) {
+    void open_container(const char* extension, abort_callback& abort) {
         m_container = joc_container::scan(m_native_path.get_ptr());
         if (!m_container.eac3) {
+            const joc_decode::Settings settings = joc_settings::current();
+            if (settings.take_over_pcm) {
+                open_pcm_fallback(abort, m_container.audio_index,
+                                  m_container.detail.c_str());
+                return;
+            }
             decline("decoder: yielding to the built-in decoder (%s)",
                     m_container.detail.c_str());
             throw exception_io_unsupported_format();
@@ -319,14 +390,16 @@ public:
         std::string detail;
         if (!joc_decode::probe_container_joc(settings.ffmpeg_path, m_native_path.get_ptr(),
                                             m_container.audio_index, &joc, &detail)) {
+            if (settings.take_over_pcm) {
+                open_pcm_fallback(abort, m_container.audio_index, detail.c_str());
+                return;
+            }
             decline("decoder: cannot examine the E-AC-3 track (%s); yielding", detail.c_str());
             throw exception_io_unsupported_format();
         }
         if (!joc) {
-            decline("decoder: yielding to the built-in decoder (E-AC-3 track %u carries "
-                    "no JOC: %s)",
-                    m_container.audio_index, detail.c_str());
-            throw exception_io_unsupported_format();
+            open_pcm_fallback(abort, m_container.audio_index, detail.c_str());
+            return;
         }
 
         joc_log::line("decoder: claiming this file as E-AC-3 JOC (%s, audio track %u, .%s)",
@@ -346,6 +419,32 @@ public:
                 return;
             }
             throw exception_tagging_unsupported();
+        }
+
+        if (m_pcm_mode) {
+            const joc_decode::Settings settings = joc_settings::current();
+            info.info_set("codec", "PCM");
+            info.info_set("codec_long", "PCM via ffmpeg (JOC binaural takeover)");
+            info.info_set_int("samplerate", kSampleRate);
+            info.info_set_channels_ex(2, channel_map_for(2));
+            info.info_set_bitspersample(32u, true);
+            info.set_length(m_length);
+            info.info_set("joc_render", "binaural (PCM takeover)");
+            info.info_set("joc_hrtf", settings.hrtf_file.empty()
+                                          ? "(未设置)"
+                                          : file_name_of(settings.hrtf_file).c_str());
+            if (m_forward_reader.is_valid()) {
+                try {
+                    file_info_impl tags;
+                    m_forward_reader->get_info(0, tags, abort);
+                    info.copy_meta(tags);
+                } catch (const pfc::exception& error) {
+                    joc_log::line("decoder: reading this file's own tags failed: %s",
+                                  error.what());
+                }
+            }
+            joc_log::line("decoder: get_info PCM takeover duration=%.3f s", m_length);
+            return;
         }
 
         const joc_decode::FileProbe probe =
@@ -462,6 +561,19 @@ public:
 
     void decode_initialize(unsigned flags, abort_callback& abort) {
         (void)abort;
+        if (m_pcm_mode) {
+            m_settings = joc_settings::current();
+            m_channels = 2;
+            m_channel_config = channel_map_for(m_channels);
+            m_buffer.resize(kRunFrames * m_channels);
+            m_frames_delivered = 0;
+            m_reported = false;
+            m_delivery_mismatches = 0;
+            m_clipped_samples = 0;
+            m_clip_reported = false;
+            joc_log::line("decoder: PCM takeover ready (binaural, ffmpeg only)");
+            return;
+        }
         m_settings = joc_settings::current();
         m_settings.input_kind = m_input_kind;
         m_settings.audio_index = m_audio_index;
@@ -521,6 +633,26 @@ public:
     bool decode_run(audio_chunk& chunk, abort_callback& abort) {
         (void)abort;
         std::string error;
+        if (m_pcm_mode) {
+            const std::size_t pcm_frames = m_pcm.read(m_buffer.data(), kRunFrames, &error);
+            if (pcm_frames == 0) {
+                if (!error.empty()) {
+                    joc_log::line("decoder: PCM read failed: %s", error.c_str());
+                    throw exception_io_data(error.c_str());
+                }
+                return false;
+            }
+            chunk.set_data_32(m_buffer.data(), pcm_frames,
+                              audio_chunk::makeSpec(kSampleRate, m_channels,
+                                                    m_channel_config));
+            m_frames_delivered += pcm_frames;
+            if (!m_reported) {
+                m_reported = true;
+                joc_log::line("decoder: first %llu PCM frames delivered (binaural)",
+                              static_cast<unsigned long long>(pcm_frames));
+            }
+            return true;
+        }
         const std::size_t frames = m_engine.read(m_buffer.data(), kRunFrames, &error);
         if (frames == 0) {
             if (!error.empty()) {
@@ -606,6 +738,19 @@ public:
     void decode_seek(double seconds, abort_callback& abort) {
         // Walking the syncframe index of a long file is the only part of a seek
         // that can take a while, and it polls this.
+        if (m_pcm_mode) {
+            std::string error;
+            if (!m_pcm.seek(seconds, &error)) {
+                abort.check();
+                joc_log::line("decoder: PCM seek to %.6f s failed: %s", seconds, error.c_str());
+                throw exception_io_data(error.c_str());
+            }
+            m_frames_delivered = 0;
+            m_reported = false;
+            m_delivery_mismatches = 0;
+            joc_log::line("decoder: PCM seek to %.6f s", seconds);
+            return;
+        }
         m_engine.set_abort_check([&abort] { return !abort.is_aborting(); });
         std::string error;
         const bool ok = m_engine.seek(seconds, m_length, &error);
@@ -671,6 +816,9 @@ public:
         // track is commonly wrapped in MP4 or Matroska; the container walk in
         // open() is what keeps the other files cheap to decline.
         if (joc_container::is_container_extension(extension)) return true;
+        if (joc_settings::read().take_over_pcm && is_pcm_takeover_extension(extension)) {
+            return true;
+        }
         return (extension != nullptr) &&
                ((stricmp_utf8(extension, "eac3") == 0) || (stricmp_utf8(extension, "ec3") == 0));
     }
@@ -700,6 +848,8 @@ private:
     pfc::string8 m_native_path;
     joc_decode::Settings m_settings;
     joc_decode::Engine m_engine;
+    joc_pcm::Source m_pcm;
+    bool m_pcm_mode = false;
     // Set by open(): a bare stream is read directly, an E-AC-3 track inside a
     // container is extracted by ffmpeg before it reaches the renderer.
     joc_decode::InputKind m_input_kind = joc_decode::InputKind::kBare;

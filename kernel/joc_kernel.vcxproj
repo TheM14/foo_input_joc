@@ -185,6 +185,7 @@
     <ClCompile Include="src\speaker\speaker_step.cpp" />
     <ClCompile Include="src\speaker\speaker_trim.cpp" />
     <ClCompile Include="src\stream\stream.cpp" />
+    <ClCompile Include="src\virtual_speaker\virtual_speaker.cpp" />
     <ClCompile Include="src\task\task.cpp" />
     <ClCompile Include="src\telemetry\event_bus.cpp" />
     <ClCompile Include="src\timeline\position_timeline.cpp" />
