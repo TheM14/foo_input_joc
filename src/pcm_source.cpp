@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <vector>
 
@@ -16,6 +17,7 @@ namespace {
 
 constexpr std::size_t kFrameSamples = 1536;
 constexpr std::uint32_t kRate = 48000;
+std::atomic<std::uint64_t> g_temp_serial{0};
 
 std::uint16_t u16(const unsigned char* data) {
     return static_cast<std::uint16_t>(data[0] | (data[1] << 8));
@@ -55,6 +57,10 @@ bool Source::decode_temp(const std::string& input_path, const std::string& ffmpe
     if (!temp.empty() && temp.back() != L'\\') temp.push_back(L'\\');
     temp += L"foo_input_joc_pcm_";
     temp += std::to_wstring(GetCurrentProcessId());
+    temp += L"_";
+    temp += std::to_wstring(g_temp_serial.fetch_add(1, std::memory_order_relaxed));
+    temp += L"_";
+    temp += std::to_wstring(GetTickCount64());
     temp += L".wav";
     temp_path_ = joc_path::to_utf8(temp.c_str());
     DeleteFileW(joc_path::to_wide_extended(temp_path_).c_str());
@@ -231,6 +237,7 @@ bool Source::open(const std::string& input_path, const joc_decode::Settings& set
     }
     _fseeki64(file_, static_cast<long long>(header_.data_offset), SEEK_SET);
     frames_read_ = 0;
+    emitted_frames_ = 0;
     eof_ = false;
     flushed_ = false;
     return true;
@@ -289,14 +296,17 @@ bool Source::pull(std::size_t frames, float* destination, std::size_t* produced,
 
 std::size_t Source::read(float* destination, std::size_t frames, std::string* error) {
     if (stream_ == nullptr || destination == nullptr || frames == 0u) return 0;
+    if (emitted_frames_ >= total_frames_) return 0;
+    const std::size_t wanted = static_cast<std::size_t>(
+        std::min<std::uint64_t>(frames, total_frames_ - emitted_frames_));
     std::size_t written = 0;
-    while (written < frames) {
+    while (written < wanted) {
         std::size_t produced = 0;
-        if (!pull(frames - written, destination + written * 2u, &produced, error)) {
+        if (!pull(wanted - written, destination + written * 2u, &produced, error)) {
             return written;
         }
         written += produced;
-        if (written == frames) break;
+        if (written == wanted) break;
         if (!eof_) {
             if (!push_block(error)) return written;
             continue;
@@ -311,6 +321,7 @@ std::size_t Source::read(float* destination, std::size_t frames, std::string* er
         }
         break;
     }
+    emitted_frames_ += written;
     return written;
 }
 
@@ -327,6 +338,7 @@ bool Source::seek(double seconds, std::string* error) {
                                             frame * static_cast<std::uint64_t>(channels_) * 4u),
               SEEK_SET);
     frames_read_ = frame;
+    emitted_frames_ = frame;
     eof_ = frames_read_ >= total_frames_;
     flushed_ = false;
     return true;
@@ -348,6 +360,7 @@ void Source::close() {
     }
     feed_.clear();
     frames_read_ = 0;
+    emitted_frames_ = 0;
     total_frames_ = 0;
     length_seconds_ = 0.0;
     eof_ = false;

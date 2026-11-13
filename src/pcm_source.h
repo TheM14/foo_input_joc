@@ -58,6 +58,7 @@ private:
     std::string temp_path_;
     std::vector<float> feed_;
     std::uint64_t frames_read_ = 0;
+    std::uint64_t emitted_frames_ = 0;
     std::uint64_t total_frames_ = 0;
     double length_seconds_ = 0.0;
     bool eof_ = false;
