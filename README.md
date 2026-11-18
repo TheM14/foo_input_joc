@@ -172,5 +172,5 @@ pwsh -File tools/package.ps1            # 两个架构，打包到 dist\*.fb2k-c
 ## 许可
 
 `LICENSE` 是上游 MIT 许可，原样复制；`kernel/` 是上游渲染内核源码的副本，同步自 JustOneCacophonyCXX 的
-1.3.1 版本，保留其声明。见
+1.3.4 版本，保留其声明。见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

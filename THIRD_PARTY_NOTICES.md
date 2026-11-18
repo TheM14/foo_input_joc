@@ -5,7 +5,7 @@
 （`kernel/src/joc_bitstream/joc_huffman_tables.h`）的公开标准来源，以及 HRTF 数据与
 专利的边界说明。
 
-`kernel/` 整体是 JustOneCacophonyCXX 1.3.1 的逐字副本。
+`kernel/` 整体是 JustOneCacophonyCXX 1.3.4 的逐字副本。
 
 ## 公开标准来源
 
